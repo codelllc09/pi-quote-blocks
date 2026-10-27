@@ -1,22 +1,41 @@
 /**
- * quote-blocks.ts — 引用块模式（Codex 风格，Alt+Q）
+ * quote-blocks.ts — Codex-style quote blocks for Pi (Alt+Q)
  *
- * 结构：输入框上方 widget 渲染引用块卡片，正文只放 [Qn] 短标记；
- * 发送（input 事件）时把标记展开为 "> 引用" 给模型。
+ * Terminal editors are plain text grids, so inline floating blocks are not
+ * possible. This extension gets the same effect with three layers:
  *
- * v3 修复（真 bug 排查）：
- *   - 块状态（quotes/nextId）搬到 globalThis[Symbol.for(...)]，
- *     同一进程内跨 /reload、跨模块重复实例化存活——排除「widget 实例
- *     和 input-handler 实例各持一份状态」导致发送时不展开的问题
- *   - 全链路调试日志（/tmp/quote-blocks-debug.log），带模块实例指纹，
- *     再出问题一眼定位是哪个环节断了
+ *   1. Block cards render in the widget area above the editor (same spot
+ *      as image chips)
+ *   2. The draft only holds short [Qn] markers; marker position = anchor
+ *   3. On submit (input-event transform) markers expand to Markdown quotes
  *
- * 快捷键：Alt+Q 引用选区；Alt+Shift+Q 折叠/展开
- * 命令：/quote-selection（同 Alt+Q）· /quotes [clear|fold|unfold]
- * 折叠：卡片总行数 > PI_QUOTE_FOLD_LINES（默认 8）自动收成一行
+ * Layout:
  *
- * 选区获取改自 alandarev/pi-quote v0.1.2（MIT）；版本门 >= 1.0.3，
- * 渲染器/编辑器 API 运行时逐项探测。
+ *   ❝ Q1 · 3 lines            ← widget: quote block cards
+ *   │ The cache should expire after 24 hours.
+ *   ❝ Q2 · 1 line
+ *   │ switch to docker compose deploy
+ *   ────────────────────────────────
+ *   ❯ [Q1] is this right? [Q2] and this?   ← draft: short markers only
+ *
+ * Shortcuts: Alt+Q quote selection; Alt+Shift+Q fold/expand
+ * Commands:  /quote-selection (same as Alt+Q) · /quotes [clear|fold|unfold]
+ * Folding:   auto-collapse to one line beyond PI_QUOTE_FOLD_LINES (default 8)
+ *
+ * Design notes from debugging history (2026-10):
+ *   - Block state (quotes/nextId) lives in globalThis[Symbol.for(...)] so it
+ *     survives /reload and module re-instantiation. Without this, the widget
+ *     and the input handler can end up in different module instances, each
+ *     with its own empty state — quotes visibly stack but never expand.
+ *   - pruneQuotes() must NOT prune when the draft is empty: on submit the
+ *     TUI clears the editor BEFORE the input event fires, so an empty draft
+ *     at that moment means "submitting", not "user deleted the markers".
+ *   - The sent text is the single source of truth at input time: markers
+ *     found in it expand; blocks not referenced in it are dropped.
+ *
+ * Selection acquisition derives from alandarev/pi-quote v0.1.2 (MIT):
+ * https://github.com/alandarev/pi-quote — version gate follows upstream
+ * discipline (per-version review) with an escape hatch env.
  */
 
 import * as fs from "node:fs";
@@ -24,30 +43,30 @@ import { VERSION, type ExtensionAPI, type ExtensionContext } from "@earendil-wor
 import { truncateToWidth } from "@earendil-works/pi-tui";
 
 export const MIN_PI_VERSION = "1.0.3";
-/** 已逐版人工验证的 Pi 版本（沿用上游纪律：每升一版，重验下述 API 后加入）。
- * 逃生门：PI_QUOTE_ALLOW_UNREVIEWED=1 跳过检查（自担风险）。 */
+/** Pi versions verified against the renderer/editor APIs used below.
+ * Re-verify after each Pi release before adding it here. */
 export const REVIEWED_PI_VERSIONS = ["1.0.3", "1.4.0"];
 export const SHORTCUT = "alt+q";
 const WIDGET_KEY = "quote-blocks";
 const MAX_PREVIEW_LINES = 2;
 const FOLD_THRESHOLD = Number(process.env.PI_QUOTE_FOLD_LINES ?? 8);
 const DEBUG_LOG = process.env.PI_QUOTE_DEBUG_LOG ?? "/tmp/quote-blocks-debug.log";
-/** 调试日志：PI_QUOTE_DEBUG=1 时才写，默认零 I/O */
+/** Debug log: only written when PI_QUOTE_DEBUG=1; zero I/O otherwise. */
 const DEBUG = process.env.PI_QUOTE_DEBUG === "1";
 
-/** 模块实例指纹：排查多实例分裂用 */
+/** Random per-module-instance fingerprint, for split-instance diagnosis. */
 const INSTANCE = Math.random().toString(36).slice(2, 8);
 const dbg = (message: string): void => {
 	if (!DEBUG) return;
 	try {
 		fs.appendFileSync(DEBUG_LOG, `${new Date().toISOString()} [${INSTANCE}] ${message}\n`);
 	} catch {
-		/* 日志失败不影响功能 */
+		/* logging must never break the feature */
 	}
 };
 dbg("module evaluated");
 
-// ---- 跨实例共享状态（globalThis，同进程内 /reload 存活） ----
+// ---- Shared state (globalThis: survives /reload within one process) ----
 
 interface QuoteStore {
 	quotes: Map<number, string>;
@@ -59,7 +78,7 @@ function sharedStore(): QuoteStore {
 	const g = globalThis as Record<symbol, QuoteStore | undefined>;
 	if (!g[STORE]) {
 		g[STORE] = { quotes: new Map(), nextId: 1 };
-		dbg(`store created (fresh)`);
+		dbg("store created (fresh)");
 	}
 	return g[STORE];
 }
@@ -73,6 +92,7 @@ type SelectionRenderer = {
 	getFocusedComponent(): unknown;
 };
 
+/** Pi's built-in prompt editor (pi-tui Editor). `moveToLineEnd` is private, guarded by runtime probing. */
 type CursorEditor = {
 	getLines(): string[];
 	getCursor(): { line: number; col: number };
@@ -100,7 +120,7 @@ function versionAtLeast(a: string, b: string): boolean {
 	return true;
 }
 
-/** 引用原文 → markdown 引用行（发给模型用的形态） */
+/** Raw selection text → Markdown quote lines (the form sent to the model). */
 export function formatQuote(text: string): string {
 	const normalized = text.replace(/\r\n?/g, "\n").replace(/^\n+|\n+$/g, "");
 	if (!normalized.trim()) return "";
@@ -111,9 +131,9 @@ export function formatQuote(text: string): string {
 }
 
 /**
- * 把正文里的 [Qn] 标记替换为引用块，前后补空行。
- * 没空行的话，markdown 的 lazy continuation 会把批注文字吞进引用块里，
- * 导致引用和回复粘成一坨分不清（真 bug，2026-10-27 用户反馈）。
+ * Replace a [Qn] marker with its quote, padded with blank lines on both
+ * sides. Without them, Markdown lazy continuation swallows the annotation
+ * into the blockquote and quote/reply boundaries become unreadable.
  */
 export function expandMarker(text: string, marker: string, quote: string): string {
 	if (!text.includes(marker)) return text;
@@ -123,17 +143,18 @@ export function expandMarker(text: string, marker: string, quote: string): strin
 			if (idx === 0) return part;
 			let seg = "";
 			const prev = parts[idx - 1];
-			if (prev.length > 0 && !prev.endsWith("\n")) seg += "\n\n"; // 前侧：不在行首则空行分隔
+			if (prev.length > 0 && !prev.endsWith("\n")) seg += "\n\n"; // leading: not at line start
 			seg += quote;
 			if (part.length > 0) {
-				seg += "\n\n"; // 后侧：批注前空行，避免被吞进引用块
-				if (part.startsWith("\n")) part = part.slice(1); // 已有换行则吞一个，避免双空行
+				seg += "\n\n"; // trailing: keep annotations out of the quote block
+				if (part.startsWith("\n")) part = part.slice(1); // avoid double blank lines
 			}
 			return seg + part;
 		})
 		.join("");
 }
 
+/** Focused component, only if it is the prompt editor with cursor APIs; else undefined. */
 function getCursorEditor(renderer: SelectionRenderer, draft: string): CursorEditor | undefined {
 	const candidate = renderer.getFocusedComponent() as Partial<CursorEditor> | null | undefined;
 	if (!candidate) return undefined;
@@ -147,6 +168,9 @@ function getCursorEditor(renderer: SelectionRenderer, draft: string): CursorEdit
 
 function getRenderer(ctx: ExtensionContext): SelectionRenderer {
 	let renderer: unknown;
+	// A synchronous, zero-row widget factory receives Pi's live renderer
+	// reference. Install and remove immediately: no persistent widget, no
+	// editor replacement, no stale mode/session reference.
 	try {
 		ctx.ui.setWidget(
 			`${WIDGET_KEY}:bridge`,
@@ -181,15 +205,15 @@ export default function (pi: ExtensionAPI): void {
 	dbg("factory invoked");
 	const store = sharedStore();
 
-	// ---- 实例内 UI 状态 ----
+	// ---- Per-instance UI state ----
 	let currentCtx: ExtensionContext | undefined;
 	let requestRender: (() => void) | undefined;
 	let cachedLines: string[] | undefined;
 	let cachedWidth: number | undefined;
-	/** 折叠状态：undefined = 自动；"expanded" / "folded" = 手动 */
+	/** Fold state: undefined = auto (fold beyond threshold); "expanded"/"folded" = manual. */
 	let foldOverride: "expanded" | "folded" | undefined;
 
-	/** 分配块编号：块库为空时从 Q1 重新开始（跨发送/reload 不再累加） */
+	/** Allocate a block id: restart at Q1 whenever the store is empty. */
 	function allocateId(): number {
 		if (store.quotes.size === 0) store.nextId = 1;
 		return store.nextId++;
@@ -202,9 +226,9 @@ export default function (pi: ExtensionAPI): void {
 		requestRender?.();
 	}
 
-	/** 正文里已无对应标记的引用块：移除。
-	 * 注意：空草稿时绝不 prune——TUI 按回车后编辑器会先清空再触发 input 事件，
-	 * 那个瞬间空草稿是提交动作而不是用户删标记（真 bug 根因，见日志 2026-10-27）。 */
+	/** Drop blocks whose markers are no longer in the draft.
+	 * Never prune when the draft is empty: on submit the editor is cleared
+	 * before the input event fires, so an empty draft means "submitting". */
 	function pruneQuotes(): boolean {
 		if (!currentCtx) return false;
 		let draft = "";
@@ -226,7 +250,7 @@ export default function (pi: ExtensionAPI): void {
 		return store.quotes.size !== before;
 	}
 
-	/** widget 渲染：无块 0 行；超阈值折叠一行 */
+	/** Widget render: zero lines when empty; one folded line beyond the threshold. */
 	function renderWidget(width: number): string[] {
 		if (pruneQuotes()) cachedLines = undefined;
 		if (store.quotes.size === 0) {
@@ -238,12 +262,12 @@ export default function (pi: ExtensionAPI): void {
 		const fg = (c: string, t: string) => (theme ? theme.fg(c, t) : t);
 		const totalLines = [...store.quotes.values()].reduce(
 			(sum, raw) => sum + Math.min(raw.replace(/\r\n?/g, "\n").split("\n").length, MAX_PREVIEW_LINES) + 2,
-			store.quotes.size,
+			store.quotes.size, // per-block gap (one trailing gap is popped below)
 		);
 		const shouldFold = foldOverride === "folded" || (foldOverride !== "expanded" && totalLines > FOLD_THRESHOLD);
 
 		if (shouldFold) {
-			const summary = `❝❝❝ ${store.quotes.size} quote blocks · ${totalLines} lines · alt+shift+q 展开`;
+			const summary = `❝❝❝ ${store.quotes.size} quote blocks · ${totalLines} lines · alt+shift+q expand`;
 			const line = truncateToWidth(fg("accent", summary), width, fg("dim", "…"));
 			cachedWidth = width;
 			cachedLines = [line];
@@ -290,7 +314,7 @@ export default function (pi: ExtensionAPI): void {
 		);
 	}
 
-	// ---- Alt+Q：选区 → 引用块 ----
+	// ---- Alt+Q: selection → quote block ----
 	async function quoteSelection(ctx: ExtensionContext): Promise<void> {
 		if (!ctx.hasUI || ctx.mode !== "tui") return;
 		if (
@@ -298,8 +322,8 @@ export default function (pi: ExtensionAPI): void {
 			(!REVIEWED_PI_VERSIONS.includes(VERSION) && process.env.PI_QUOTE_ALLOW_UNREVIEWED !== "1")
 		) {
 			ctx.ui.notify(
-				`Quote blocks: Pi ${VERSION} 未经验证（已验证：${REVIEWED_PI_VERSIONS.join(", ")}）。` +
-					"验证后加入白名单，或设 PI_QUOTE_ALLOW_UNREVIEWED=1 强制启用。",
+				`Quote blocks: Pi ${VERSION} is not reviewed (reviewed: ${REVIEWED_PI_VERSIONS.join(", ")}). ` +
+					"Review it and add to REVIEWED_PI_VERSIONS, or set PI_QUOTE_ALLOW_UNREVIEWED=1 to force.",
 				"warning",
 			);
 			return;
@@ -346,7 +370,7 @@ export default function (pi: ExtensionAPI): void {
 		handler: async (_args, ctx) => quoteSelection(ctx),
 	});
 
-	// ---- 折叠切换：Alt+Shift+Q ----
+	// ---- Fold toggle: Alt+Shift+Q ----
 	function toggleFold(ctx: ExtensionContext): void {
 		if (store.quotes.size === 0) {
 			ctx.ui.notify("No quote blocks", "info");
@@ -362,7 +386,7 @@ export default function (pi: ExtensionAPI): void {
 		handler: async (ctx) => toggleFold(ctx),
 	});
 
-	// ---- /quotes 管理 ----
+	// ---- /quotes management ----
 	pi.registerCommand("quotes", {
 		description: "Manage quote blocks (/quotes · /quotes clear · /quotes fold · /quotes unfold)",
 		handler: async (args, ctx) => {
@@ -410,7 +434,7 @@ export default function (pi: ExtensionAPI): void {
 		},
 	});
 
-	// ---- 发送时展开标记 ----
+	// ---- Expand markers on submit ----
 	pi.on("input", async (event) => {
 		dbg(`input: source=${event.source} size=${store.quotes.size} textLen=${event.text.length}`);
 		if (store.quotes.size === 0) {
@@ -431,22 +455,26 @@ export default function (pi: ExtensionAPI): void {
 			}
 		}
 		dbg(`input: expanded [${expanded.join(",") || "-"}] changed=${changed}`);
-		// 发送文本是唯一依据：没被引用的块在此统一清除（提交竞态下编辑器已空，无法区分）
+		// The sent text is the single source of truth: blocks it does not
+		// reference are dropped here (the editor is already empty at this
+		// point, so "user deleted the marker" cannot be told apart).
 		if (store.quotes.size > 0) {
 			dbg(`input: dropping unmatched [${[...store.quotes.keys()].join(",")}]`);
 			store.quotes.clear();
 		}
-		if (store.quotes.size === 0) foldOverride = undefined;
+		if (store.quotes.size === 0) foldOverride = undefined; // reset fold for the next batch
 		invalidateWidget();
 		if (!changed) return { action: "continue" };
 		dbg(`input: => transform (newLen=${text.length})`);
 		return { action: "transform", text };
 	});
 
-	// ---- 生命周期 ----
+	// ---- Lifecycle ----
 	pi.on("session_start", async (_event, ctx) => {
-		// 新会话（/new、/resume）编辑器为空，残留块无意义；/reload 时草稿还在，
-		// 标记存活的块保留。此处允许空草稿判定（与 pruneQuotes 的提交竞态保护不同）。
+		// New sessions (/new, /resume) start with an empty editor, so stale
+		// blocks are meaningless; /reload keeps the draft, so blocks whose
+		// markers survive stay. Empty-draft check is allowed here (unlike
+		// pruneQuotes, there is no submit race at session_start).
 		try {
 			const draft = ctx.mode === "tui" ? ctx.ui.getEditorText() : "";
 			for (const id of [...store.quotes.keys()]) {
@@ -454,7 +482,7 @@ export default function (pi: ExtensionAPI): void {
 			}
 			if (store.quotes.size === 0) store.nextId = 1;
 		} catch {
-			/* 保守起见保留 */
+			/* keep blocks when the editor is unreadable */
 		}
 		dbg(`session_start: mode=${ctx.mode} live blocks=${store.quotes.size} nextId=${store.nextId}`);
 		currentCtx = ctx;
