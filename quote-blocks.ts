@@ -92,6 +92,61 @@ type SelectionRenderer = {
 	getFocusedComponent(): unknown;
 };
 
+/**
+ * Cached renderer reference. The upstream trick (install/remove a zero-row
+ * bridge widget to capture the renderer) touches the widget lifecycle on
+ * every press, which makes Pi reconfigure terminal modes (keyboard protocol
+ * push/pop). On WezTerm that churn can intermittently wedge the window-level
+ * IME state until the next focus event. Acquiring once and caching removes
+ * the churn entirely.
+ */
+let cachedRenderer: SelectionRenderer | undefined;
+
+function getRenderer(ctx: ExtensionContext): SelectionRenderer {
+	if (cachedRenderer?.mode === "fullscreen") {
+		for (const method of ["getActiveSelectionText", "clearTextSelection", "requestRender", "hasOverlay", "getFocusedComponent"] as const) {
+			if (typeof cachedRenderer[method] !== "function") {
+				cachedRenderer = undefined; // stale: re-acquire below
+				break;
+			}
+		}
+		if (cachedRenderer) return cachedRenderer;
+	}
+	let renderer: unknown;
+	// A synchronous, zero-row widget factory receives Pi's live renderer
+	// reference. Install and remove immediately — once per session.
+	try {
+		ctx.ui.setWidget(
+			`${WIDGET_KEY}:bridge`,
+			(tui) => {
+				renderer = tui;
+				return { render: () => [], invalidate() {} };
+			},
+			{ placement: "belowEditor" },
+		);
+	} finally {
+		ctx.ui.setWidget(`${WIDGET_KEY}:bridge`, undefined);
+	}
+	const candidate = renderer as Partial<SelectionRenderer> | undefined;
+	if (candidate?.mode !== "fullscreen") {
+		throw new Error("Quote blocks need Pi fullscreen mode (normal mouse drag, not Shift+drag).");
+	}
+	for (const method of [
+		"getActiveSelectionText",
+		"clearTextSelection",
+		"requestRender",
+		"hasOverlay",
+		"getFocusedComponent",
+	] as const) {
+		if (typeof candidate[method] !== "function") {
+			throw new Error(`Quote blocks unavailable: Pi renderer API changed (${method}).`);
+		}
+	}
+	cachedRenderer = candidate as SelectionRenderer;
+	dbg("renderer acquired and cached (one-time bridge)");
+	return cachedRenderer;
+}
+
 /** Pi's built-in prompt editor (pi-tui Editor). `moveToLineEnd` is private, guarded by runtime probing. */
 type CursorEditor = {
 	getLines(): string[];
@@ -164,41 +219,6 @@ function getCursorEditor(renderer: SelectionRenderer, draft: string): CursorEdit
 	const editor = candidate as CursorEditor;
 	const text = typeof editor.getExpandedText === "function" ? editor.getExpandedText() : editor.getText();
 	return text === draft ? editor : undefined;
-}
-
-function getRenderer(ctx: ExtensionContext): SelectionRenderer {
-	let renderer: unknown;
-	// A synchronous, zero-row widget factory receives Pi's live renderer
-	// reference. Install and remove immediately: no persistent widget, no
-	// editor replacement, no stale mode/session reference.
-	try {
-		ctx.ui.setWidget(
-			`${WIDGET_KEY}:bridge`,
-			(tui) => {
-				renderer = tui;
-				return { render: () => [], invalidate() {} };
-			},
-			{ placement: "belowEditor" },
-		);
-	} finally {
-		ctx.ui.setWidget(`${WIDGET_KEY}:bridge`, undefined);
-	}
-	const candidate = renderer as Partial<SelectionRenderer> | undefined;
-	if (candidate?.mode !== "fullscreen") {
-		throw new Error("Quote blocks need Pi fullscreen mode (normal mouse drag, not Shift+drag).");
-	}
-	for (const method of [
-		"getActiveSelectionText",
-		"clearTextSelection",
-		"requestRender",
-		"hasOverlay",
-		"getFocusedComponent",
-	] as const) {
-		if (typeof candidate[method] !== "function") {
-			throw new Error(`Quote blocks unavailable: Pi renderer API changed (${method}).`);
-		}
-	}
-	return candidate as SelectionRenderer;
 }
 
 export default function (pi: ExtensionAPI): void {
@@ -493,6 +513,7 @@ export default function (pi: ExtensionAPI): void {
 
 	pi.on("session_shutdown", async () => {
 		dbg("session_shutdown: widget removed (block state kept in shared store)");
+		cachedRenderer = undefined; // renderer belongs to the old TUI session
 		currentCtx?.ui.setWidget(WIDGET_KEY, undefined);
 		requestRender = undefined;
 	});
