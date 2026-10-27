@@ -47,6 +47,14 @@ extension gets the same effect with three layers:
 | `PI_QUOTE_DEBUG_LOG` | `/tmp/quote-blocks-debug.log` | Log path |
 | `PI_QUOTE_ALLOW_UNREVIEWED` | off | `=1` skips the reviewed-version allowlist |
 
+## Install
+
+```bash
+pi install npm:pi-quote-blocks
+```
+
+Or from source: `pi install git:github.com/codelllc09/pi-quote-blocks`
+
 ## Compatibility
 
 Reads the selection through renderer internals, so the upstream discipline

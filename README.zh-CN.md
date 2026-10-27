@@ -43,6 +43,14 @@
 | `PI_QUOTE_DEBUG_LOG` | `/tmp/quote-blocks-debug.log` | 日志路径 |
 | `PI_QUOTE_ALLOW_UNREVIEWED` | 关 | `=1` 跳过版本白名单（自担风险） |
 
+## 安装
+
+```bash
+pi install npm:pi-quote-blocks
+```
+
+或从源码安装：`pi install git:github.com/codelllc09/pi-quote-blocks`
+
 ## 兼容性
 
 使用了 pi 渲染器的内部 API（选区读取），因此沿用上游的**逐版验证纪律**：
