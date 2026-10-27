@@ -3,8 +3,26 @@
 	"version": "0.1.0",
 	"description": "Codex-style quote blocks for Pi: select a passage, get a block card above the editor, expand on submit",
 	"license": "MIT",
-	"keywords": ["pi-package", "pi-extension", "pi", "quote", "reply"],
+	"keywords": [
+		"pi",
+		"pi-extension",
+		"pi-package",
+		"quote",
+		"reply"
+	],
 	"pi": {
-		"extensions": ["./quote-blocks.ts"]
+		"extensions": [
+			"./quote-blocks.ts"
+		]
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/codelllc09/pi-quote-blocks.git"
+	},
+	"homepage": "https://github.com/codelllc09/pi-quote-blocks#readme",
+	"bugs": "https://github.com/codelllc09/pi-quote-blocks/issues",
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*"
 	}
 }
