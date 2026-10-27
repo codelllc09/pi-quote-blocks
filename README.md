@@ -67,4 +67,3 @@ See `LICENSE`.
 
 - [ ] Clipboard fallback for unreviewed pi versions (read copy-on-select
       clipboard — public API only)
-- [ ] Publish to the pi package gallery (npm)
