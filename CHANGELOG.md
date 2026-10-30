@@ -49,6 +49,13 @@
 
 ### Fixed
 
+- `Alt+Shift+Q` (fold/expand) never fired on most terminals: legacy
+  encoding sends it as ESC + uppercase Q, which pi's key parser has no
+  key id for. `Alt+F` is now the universal fold binding (extension
+  shortcuts are matched before app keybindings, so it is safe);
+  `Alt+Shift+Q` stays registered for kitty-keyboard-protocol terminals.
+  The folded-card hint now says `alt+f expand`.
+
 - `/quotes clear` collapsed every run of spaces in the whole draft (code
   indentation, aligned text). Markers are now removed whole with at most one
   adjacent space; unrelated spacing is never touched.

@@ -31,7 +31,7 @@
 | `Alt+Q` 无选区 / pi 版本未验证 | 回退读系统剪贴板（pi 拖选自动复制） |
 | 继续选、继续 `Alt+Q` | 多块并存，编号每批从 Q1 开始 |
 | 删掉正文里的 `[Qn]` | 对应卡片即时消失 |
-| `Alt+Shift+Q` | 折叠 / 展开所有块 |
+| `Alt+F` | 抙叠 / 展开所有块（kitty keyboard protocol 终端下 `Alt+Shift+Q` 也可） |
 | `Alt+E` | 打字途中管理引用块：窗口停靠在编辑器上方，浏览带全文预览；高亮块上直接 `e` 编辑 / `r` 删除 / `i` 重插，Enter 进动作菜单 |
 | `/quote` · `/quote 2` | 将上一条 / 倒数第二条回复整段建为引用块 |
 | `/quotes` | 打开块管理器（同 Alt+E 对话框）；子命令 `clear` / `fold` / `unfold` / `edit Qn` / `remove Qn` / `preview` |

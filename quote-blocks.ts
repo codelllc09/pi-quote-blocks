@@ -18,7 +18,8 @@
  *   ────────────────────────────────
  *   ❯ [Q1] is this right? [Q2] and this?   ← draft: short markers only
  *
- * Shortcuts: Alt+Q quote selection; Alt+Shift+Q fold/expand; Alt+E manage
+ * Shortcuts: Alt+Q quote selection; Alt+F fold/expand; Alt+E manage
+ *            (Alt+Shift+Q fold only parses under the kitty keyboard protocol)
  * Fallback:  Alt+Q with no readable selection quotes the system clipboard
  *            (Pi copy-on-select keeps it in sync); PI_QUOTE_CLIPBOARD=0 off
  * Commands:  /quote [n] (nth-last assistant reply) · /quotes (opens the Alt+E
@@ -362,7 +363,7 @@ export default function (pi: ExtensionAPI): void {
 		const shouldFold = foldOverride === "folded" || (foldOverride !== "expanded" && totalLines > FOLD_THRESHOLD);
 
 		if (shouldFold) {
-			const summary = `❝❝❝ ${store.quotes.size} quote blocks · ${totalLines} lines · alt+shift+q expand`;
+			const summary = `❝❝❝ ${store.quotes.size} quote blocks · ${totalLines} lines · alt+f expand`;
 			const line = truncateToWidth(fg("accent", summary), width, fg("dim", "…"));
 			cachedWidth = width;
 			cachedLines = [line];
@@ -495,7 +496,7 @@ export default function (pi: ExtensionAPI): void {
 		handler: async (ctx) => quoteSelection(ctx),
 	});
 
-	// ---- Fold toggle: Alt+Shift+Q ----
+	// ---- Fold toggle: Alt+F (universal) + Alt+Shift+Q (kitty protocol only) ----
 	function toggleFold(ctx: ExtensionContext): void {
 		if (store.quotes.size === 0) {
 			ctx.ui.notify("No quote blocks", "info");
@@ -506,8 +507,17 @@ export default function (pi: ExtensionAPI): void {
 		ctx.ui.notify(foldOverride === "expanded" ? "Quote blocks expanded" : "Quote blocks folded", "info");
 	}
 
+	pi.registerShortcut("alt+f", {
+		description: "Fold / expand quote blocks",
+		handler: async (ctx) => toggleFold(ctx),
+	});
+	// Legacy terminal encoding sends Alt+Shift+Q as ESC + uppercase Q, which
+	// pi's key parser has no key id for (only ESC + lowercase becomes
+	// alt+<key>) and matchesKey has no legacy alt+shift+letter rule for —
+	// the binding is dead outside kitty-keyboard-protocol terminals. Kept
+	// for those; Alt+F is the universal binding.
 	pi.registerShortcut("alt+shift+q", {
-		description: "Toggle quote blocks fold/expand",
+		description: "Fold / expand quote blocks (kitty keyboard protocol only)",
 		handler: async (ctx) => toggleFold(ctx),
 	});
 
