@@ -49,12 +49,15 @@
 
 ### Fixed
 
-- `Alt+Shift+Q` (fold/expand) never fired on most terminals: legacy
-  encoding sends it as ESC + uppercase Q, which pi's key parser has no
-  key id for. `Alt+F` is now the universal fold binding (extension
-  shortcuts are matched before app keybindings, so it is safe);
-  `Alt+Shift+Q` stays registered for kitty-keyboard-protocol terminals.
-  The folded-card hint now says `alt+f expand`.
+- `Alt+Shift+Q` (fold/expand) never fired: legacy encoding sends it as
+  ESC + uppercase Q, which pi's key parser has no key id for. Verified
+  against pi-tui 1.4.0's matcher, the kitty CSI-u forms do not work
+  either — `\x1b[113:81;3u`/`\x1b[113;3u` normalize the shifted letter
+  back to lowercase and match `alt+q` (so Alt+Shift+Q would trigger
+  quote selection), and `\x1b[81;3u` matches nothing. The registration
+  is removed; `Alt+F` is the only fold binding (extension shortcuts are
+  matched before app keybindings, so it is safe). The folded-card hint
+  now says `alt+f expand`.
 
 - `/quotes clear` collapsed every run of spaces in the whole draft (code
   indentation, aligned text). Markers are now removed whole with at most one

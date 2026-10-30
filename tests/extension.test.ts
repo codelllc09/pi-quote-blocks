@@ -144,21 +144,26 @@ describe("extension factory", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("fold binding survives legacy terminal encoding (alt+f), unlike alt+shift+q", () => {
-		// Documents why alt+f exists: in legacy encoding Alt+Shift+Q arrives as
-		// ESC + uppercase Q, which has no key id — matchesKey cannot fire it.
-		// Alt+F arrives as ESC + lowercase f and matches. Extension shortcuts
-		// are checked before app keybindings, so the parseKey alt+right special
-		// case for \x1bF does not interfere.
+	it("fold binding: alt+f parses everywhere; alt+shift+q is dead or harmful (not registered)", () => {
+		// Verified against pi-tui 1.4.0's matcher:
+		// - legacy: ESC + uppercase Q has no key id
+		// - kitty "\x1b[113:81;3u"/"\x1b[113;3u" normalize the shifted letter
+		//   back to lowercase and match alt+q (quote selection!), not alt+shift+q
+		// - kitty "\x1b[81;3u" matches nothing
 		expect(matchesKey("\x1bf", "alt+f")).toBe(true);
 		expect(matchesKey("\x1bQ", "alt+shift+q")).toBe(false);
+		expect(matchesKey("\x1b[113:81;3u", "alt+shift+q")).toBe(false);
+		expect(matchesKey("\x1b[113;3u", "alt+shift+q")).toBe(false);
+		expect(matchesKey("\x1b[81;3u", "alt+shift+q")).toBe(false);
+		expect(matchesKey("\x1b[113:81;3u", "alt+q")).toBe(true); // the collision
 	});
 
 	it("registers shortcuts, commands, and lifecycle events", () => {
 		const h = harness();
 		expect(Object.keys(h.shortcuts)).toEqual(
-			expect.arrayContaining(["alt+q", "alt+shift+q", "alt+e", "alt+f"]),
+			expect.arrayContaining(["alt+q", "alt+e", "alt+f"]),
 		);
+		expect(Object.keys(h.shortcuts)).not.toContain("alt+shift+q");
 		expect(Object.keys(h.commands)).toEqual(
 			expect.arrayContaining(["quote", "quotes"]),
 		);

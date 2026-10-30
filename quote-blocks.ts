@@ -19,7 +19,6 @@
  *   ❯ [Q1] is this right? [Q2] and this?   ← draft: short markers only
  *
  * Shortcuts: Alt+Q quote selection; Alt+F fold/expand; Alt+E manage
- *            (Alt+Shift+Q fold only parses under the kitty keyboard protocol)
  * Fallback:  Alt+Q with no readable selection quotes the system clipboard
  *            (Pi copy-on-select keeps it in sync); PI_QUOTE_CLIPBOARD=0 off
  * Commands:  /quote [n] (nth-last assistant reply) · /quotes (opens the Alt+E
@@ -496,7 +495,7 @@ export default function (pi: ExtensionAPI): void {
 		handler: async (ctx) => quoteSelection(ctx),
 	});
 
-	// ---- Fold toggle: Alt+F (universal) + Alt+Shift+Q (kitty protocol only) ----
+	// ---- Fold toggle: Alt+F ----
 	function toggleFold(ctx: ExtensionContext): void {
 		if (store.quotes.size === 0) {
 			ctx.ui.notify("No quote blocks", "info");
@@ -511,15 +510,13 @@ export default function (pi: ExtensionAPI): void {
 		description: "Fold / expand quote blocks",
 		handler: async (ctx) => toggleFold(ctx),
 	});
-	// Legacy terminal encoding sends Alt+Shift+Q as ESC + uppercase Q, which
-	// pi's key parser has no key id for (only ESC + lowercase becomes
-	// alt+<key>) and matchesKey has no legacy alt+shift+letter rule for —
-	// the binding is dead outside kitty-keyboard-protocol terminals. Kept
-	// for those; Alt+F is the universal binding.
-	pi.registerShortcut("alt+shift+q", {
-		description: "Fold / expand quote blocks (kitty keyboard protocol only)",
-		handler: async (ctx) => toggleFold(ctx),
-	});
+	// Alt+Shift+Q is NOT registered, verified against pi-tui 1.4.0's matcher:
+	// - legacy encoding (ESC + uppercase Q) has no key id — matchesKey false
+	// - kitty CSI-u forms ("\x1b[113:81;3u", "\x1b[113;3u") normalize the
+	//   shifted letter back to lowercase and match alt+q instead — pressing
+	//   Alt+Shift+Q there fires quote-selection, and ("\x1b[81;3u") matches
+	//   nothing at all. A fold binding on this combo is dead or harmful
+	//   everywhere; Alt+F is the only fold binding.
 
 	// ---- /quote [n]: assistant reply from history → quote block ----
 	/** Concatenated text blocks of an assistant message ("" when not one). */
