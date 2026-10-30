@@ -743,8 +743,101 @@ export default function (pi: ExtensionAPI): void {
 
 	// ---- Alt+E: block manager ----
 	// Slash commands only fire when the draft starts with "/", which is
-	// exactly what you cannot do while composing. A shortcut can: the select
-	// dialog overlays the editor and never touches the draft text.
+	// exactly what you cannot do while composing. A shortcut can: the
+	// dialogs overlay the editor and never touch the draft text.
+	type PickTarget = { kind: "block"; id: number } | { kind: "clearAll" };
+
+	/** Block picker with a live preview of the highlighted block's full
+	 * content (ctx.ui.select shows one truncated line per option and has no
+	 * hover preview; this component adds both). Falls back to ctx.ui.select
+	 * on pi versions without ctx.ui.custom(). */
+	async function pickBlock(
+		ctx: ExtensionContext,
+		title: string,
+		ordered: Array<[number, string]>,
+	): Promise<PickTarget | undefined> {
+		const targets: PickTarget[] = [
+			...ordered.map(([id]): PickTarget => ({ kind: "block", id })),
+			{ kind: "clearAll" },
+		];
+		const labelOf = (target: PickTarget): string => {
+			if (target.kind === "clearAll") return "── clear all blocks ──";
+			const lines = (store.quotes.get(target.id) ?? "").split("\n");
+			return `Q${target.id} · ${lines.length} lines · ${lines[0].trim().slice(0, 50)}`;
+		};
+		const customFn: ExtensionUIContext["custom"] | undefined = (ctx.ui as Partial<ExtensionUIContext>).custom;
+		if (!customFn) {
+			const labels = targets.map(labelOf);
+			const chosen = await ctx.ui.select(title, labels);
+			if (chosen === undefined) return undefined;
+			const index = labels.indexOf(chosen);
+			return index >= 0 ? targets[index] : undefined;
+		}
+		const PREVIEW_LINES = 10;
+		return customFn<PickTarget | undefined>((tui, theme, keybindings, done) => {
+			let index = 0;
+			let cachedWidth: number | undefined;
+			let cachedLines: string[] | undefined;
+			const invalidate = () => {
+				cachedWidth = undefined;
+				cachedLines = undefined;
+			};
+			return {
+				render(width: number): string[] {
+					if (cachedLines && cachedWidth === width) return cachedLines;
+					const lines: string[] = [theme.fg("accent", title)];
+					targets.forEach((target, i) => {
+						const selected = i === index;
+						const cursor = selected ? "❯ " : "  ";
+						const label = selected ? theme.fg("accent", labelOf(target)) : labelOf(target);
+						lines.push(truncateToWidth(`${cursor}${label}`, width, "…"));
+					});
+					const target = targets[index];
+					lines.push(theme.fg("dim", "─".repeat(Math.max(8, Math.min(width, 64)))));
+					if (target.kind === "clearAll") {
+						lines.push(theme.fg("dim", "Remove every quote block and its marker from the draft."));
+					} else {
+						const content = (store.quotes.get(target.id) ?? "").replace(/\r\n?/g, "\n").split("\n");
+						for (const line of content.slice(0, PREVIEW_LINES)) {
+							lines.push(
+								truncateToWidth(`${theme.fg("dim", "│ ")}${line.trim()}`, width, theme.fg("dim", "…")),
+							);
+						}
+						if (content.length > PREVIEW_LINES) {
+							lines.push(theme.fg("dim", `│ … +${content.length - PREVIEW_LINES} more lines (edit shows all)`));
+						}
+					}
+					lines.push(theme.fg("dim", "↑↓ move · Enter select · Esc cancel"));
+					cachedWidth = width;
+					cachedLines = lines;
+					return lines;
+				},
+				handleInput(data: string): void {
+					if (keybindings.matches(data, "tui.select.up")) {
+						index = (index - 1 + targets.length) % targets.length;
+					} else if (keybindings.matches(data, "tui.select.down")) {
+						index = (index + 1) % targets.length;
+					} else if (keybindings.matches(data, "tui.select.pageUp")) {
+						index = Math.max(0, index - 5);
+					} else if (keybindings.matches(data, "tui.select.pageDown")) {
+						index = Math.min(targets.length - 1, index + 5);
+					} else if (keybindings.matches(data, "tui.select.confirm")) {
+						done(targets[index]);
+						return;
+					} else if (keybindings.matches(data, "tui.select.cancel")) {
+						done(undefined);
+						return;
+					} else {
+						return;
+					}
+					invalidate();
+					tui.requestRender();
+				},
+				invalidate,
+			};
+		});
+	}
+
 	async function manageBlocks(ctx: ExtensionContext): Promise<void> {
 		if (!ctx.hasUI || ctx.mode !== "tui") return;
 		if (!store.quotes.size) {
@@ -755,22 +848,15 @@ export default function (pi: ExtensionAPI): void {
 		const ordered = [...store.quotes.entries()].sort(
 			(a, b) => draft.indexOf(markerOf(a[0])) - draft.indexOf(markerOf(b[0])),
 		);
-		const CLEAR_ALL = "── clear all blocks ──";
-		const labels = ordered.map(([id, raw]) => {
-			const lines = raw.split("\n");
-			return `Q${id} · ${lines.length} lines · ${lines[0].trim().slice(0, 50)}`;
-		});
-		const chosen = await ctx.ui.select("Quote blocks — Alt+E manager", [...labels, CLEAR_ALL]);
-		if (chosen === undefined) return; // Esc cancels
-		if (chosen === CLEAR_ALL) {
+		const picked = await pickBlock(ctx, "Quote blocks — Alt+E manager", ordered);
+		if (!picked) return; // Esc cancels
+		if (picked.kind === "clearAll") {
 			if (await ctx.ui.confirm("Clear all", "Remove every quote block and its marker?")) {
 				clearAllBlocks(ctx);
 			}
 			return;
 		}
-		const index = labels.indexOf(chosen);
-		if (index < 0) return;
-		const id = ordered[index][0];
+		const id = picked.id;
 		const insertLabel = `insert ${markerOf(id)} at cursor`;
 		const action = await ctx.ui.select(`Block Q${id}`, ["edit text", "remove block", insertLabel]);
 		if (action === undefined) return;
@@ -786,7 +872,7 @@ export default function (pi: ExtensionAPI): void {
 	}
 
 	pi.registerShortcut("alt+e", {
-		description: "Manage quote blocks: edit, remove, re-insert marker, or clear all",
+		description: "Manage quote blocks: preview, edit, remove, re-insert marker, or clear all",
 		handler: async (ctx) => manageBlocks(ctx),
 	});
 

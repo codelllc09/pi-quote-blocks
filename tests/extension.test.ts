@@ -16,6 +16,11 @@ function harness() {
 	const selectQueue: Array<string | undefined> = [];
 	const confirmQueue: Array<boolean> = [];
 	const selectCalls: Array<[string, string[]]> = [];
+	const customKeys: string[] = [];
+	let customModeCurrent: "custom" | "select-fallback" = "custom";
+	let customCalls = 0;
+	let customResult: unknown;
+	let customRenderLinesCurrent: string[] = [];
 
 	const ctx = {
 		mode: "tui",
@@ -39,6 +44,31 @@ function harness() {
 				return Promise.resolve(selectQueue.shift());
 			},
 			confirm: (_title: string, _message: string) => Promise.resolve(confirmQueue.shift() ?? false),
+			get custom() {
+				if (customModeCurrent === "select-fallback") return undefined;
+				return (
+					factory: (
+						tui: { requestRender(): void },
+						theme: { fg(_c: string, t: string): string },
+						keybindings: { matches(data: string, action: string): boolean },
+						done: (result: unknown) => void,
+					) => { render(width: number): string[]; handleInput(data: string): void; invalidate(): void },
+				) => {
+					customCalls += 1;
+					customResult = undefined;
+					const component = factory(
+						{ requestRender: () => {} },
+						{ fg: (_c, t) => t },
+						{ matches: (data, action) => data === action },
+						(result) => {
+							customResult = result;
+						},
+					);
+					for (const key of customKeys.splice(0)) component.handleInput(key);
+					customRenderLinesCurrent = component.render(80);
+					return Promise.resolve(customResult);
+				};
+			},
 			get editor() {
 				return editorNext === "unsupported"
 					? undefined
@@ -78,6 +108,16 @@ function harness() {
 		selectCalls,
 		selectQueue,
 		confirmQueue,
+		customKeys,
+		get customCalls() {
+			return customCalls;
+		},
+		get customRenderLines() {
+			return customRenderLinesCurrent;
+		},
+		set customMode(mode: "custom" | "select-fallback") {
+			customModeCurrent = mode;
+		},
 		get draft() {
 			return draft;
 		},
@@ -251,12 +291,45 @@ describe("extension factory", () => {
 		h.branch = [{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "one" }] } }];
 		await h.commands.quote.handler("", h.ctx);
 		h.draft = "about [Q1]";
-		h.selectQueue.push(undefined); // cancel at the picker
+		h.customKeys.push("tui.select.cancel");
 		await h.commands.quotes.handler("", h.ctx);
-		expect(h.selectCalls).toHaveLength(1);
-		expect(h.selectCalls[0]?.[1][0]).toContain("Q1");
-		expect(h.selectCalls[0]?.[1]).toContain("── clear all blocks ──");
+		expect(h.selectCalls).toHaveLength(0); // picker is the custom component
+		expect(h.customRenderLines.join("\n")).toContain("Q1");
+		expect(h.customRenderLines.join("\n")).toContain("clear all blocks");
 		expect(h.draft).toBe("about [Q1]"); // untouched
+	});
+
+	it("Alt+E picker previews the full multi-line content of the highlighted block", async () => {
+		const h = harness();
+		await h.events.session_start({ type: "session_start" }, h.ctx);
+		h.branch = [
+			{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "first line here" }] } },
+			{
+				type: "message",
+				message: { role: "assistant", content: [{ type: "text", text: "L1\nL2\nL3" }] },
+			},
+		];
+		await h.commands.quote.handler("2", h.ctx); // Q1 = single line
+		await h.commands.quote.handler("", h.ctx); // Q2 = three lines, highlighted after ↓
+		h.customKeys.push("tui.select.down", "tui.select.cancel");
+		await h.shortcuts["alt+e"].handler(h.ctx);
+		const preview = h.customRenderLines.join("\n");
+		expect(preview).toContain("L1");
+		expect(preview).toContain("L2");
+		expect(preview).toContain("L3"); // every line visible, not just the first
+	});
+
+	it("picker falls back to ctx.ui.select when ctx.ui.custom is unavailable", async () => {
+		const h = harness();
+		h.customMode = "select-fallback";
+		await h.events.session_start({ type: "session_start" }, h.ctx);
+		h.branch = [{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "solo" }] } }];
+		await h.commands.quote.handler("", h.ctx);
+		h.selectQueue.push("Q1 · 1 lines · solo", undefined); // pick block, cancel action menu
+		await h.shortcuts["alt+e"].handler(h.ctx);
+		expect(h.customCalls).toBe(0);
+		expect(h.selectCalls).toHaveLength(2); // picker + action menu
+		expect(h.selectCalls[0]?.[1]).toContain("── clear all blocks ──");
 	});
 
 	it("Alt+E edits a block mid-composition without touching the draft", async () => {
@@ -266,7 +339,8 @@ describe("extension factory", () => {
 		await h.commands.quote.handler("", h.ctx);
 		h.draft = "typing about [Q1] right now";
 
-		h.selectQueue.push("Q1 · 1 lines · original", "edit text");
+		h.customKeys.push("tui.select.confirm"); // first target = Q1
+		h.selectQueue.push("edit text");
 		h.editorNext = "revised text";
 		await h.shortcuts["alt+e"].handler(h.ctx);
 
@@ -286,7 +360,7 @@ describe("extension factory", () => {
 		await h.commands.quote.handler("", h.ctx);
 		h.draft = "keep  spacing [Q1] and [Q2] done";
 
-		h.selectQueue.push("── clear all blocks ──");
+		h.customKeys.push("tui.select.down", "tui.select.down", "tui.select.confirm"); // → clear all
 		h.confirmQueue.push(true);
 		await h.shortcuts["alt+e"].handler(h.ctx);
 
@@ -302,7 +376,8 @@ describe("extension factory", () => {
 		await h.commands.quote.handler("", h.ctx);
 		h.draft = "text without marker";
 
-		h.selectQueue.push("Q1 · 1 lines · one", "insert [Q1] at cursor");
+		h.customKeys.push("tui.select.confirm"); // Q1
+		h.selectQueue.push("insert [Q1] at cursor");
 		await h.shortcuts["alt+e"].handler(h.ctx);
 
 		expect(h.draft).toBe("text without marker[Q1]");

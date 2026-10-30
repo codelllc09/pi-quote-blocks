@@ -8,7 +8,12 @@
   (the draft no longer starts with `/`), so edit / remove / clear are
   also reachable from a shortcut: pick a block, then edit its text,
   remove it, re-insert its marker at the cursor, or clear all. The
-  select dialog overlays the editor; the draft is never touched.
+  dialogs overlay the editor; the draft is never touched.
+- The block picker is a custom component with a live preview pane
+  (full content of the highlighted block, up to 10 lines, `+N more`
+  indicator) — `ctx.ui.select` alone shows one truncated line per
+  option. Falls back to `ctx.ui.select` where `ctx.ui.custom` is
+  unavailable.
 - `/quote [n]` — quote the nth-last assistant reply from session history as
   a block (public `sessionManager.getBranch()` API; default: the last reply).
   Keyboard-only quoting, no mouse selection needed.
