@@ -746,23 +746,28 @@ export default function (pi: ExtensionAPI): void {
 	// exactly what you cannot do while composing. A shortcut can: the
 	// dialogs overlay the editor and never touch the draft text.
 	type PickTarget = { kind: "block"; id: number } | { kind: "clearAll" };
+	type ManagerDecision =
+		| { kind: "edit"; id: number }
+		| { kind: "remove"; id: number }
+		| { kind: "insert"; id: number }
+		| { kind: "clear" };
 
-	/** Floating block picker with a live preview of the highlighted block.
+	/** Block picker docked above the editor, preview pane floating above the
+	 * list — the same place pi's native select appears, so browsing feels
+	 * familiar. The whole flow lives in this one window (pick → action →
+	 * confirm); only the multi-line text editor opens afterwards, after the
+	 * window has closed (no dialog nesting).
 	 *
-	 * Ergonomics (the first full-area version was genuinely dizzying):
-	 * - overlay: true — drawn above the transcript/editor, no screen takeover
-	 * - fixed window height: list pane and preview pane each pad/scroll to a
-	 *   constant row count, so moving the cursor only recolors one list row
-	 *   and swaps preview text in place; the layout never jumps
-	 * - the preview is dim and wraps (wrapTextWithAnsi), never truncates
-	 * - title sits in the top border, key hints in the bottom border
+	 * Ergonomics: fixed pane heights (moving the cursor only recolors one row
+	 * and swaps preview text in place), dim wrapped preview, cursor row is
+	 * the single accent element, title in the top border, hints in the bottom.
 	 *
 	 * Falls back to ctx.ui.select on pi versions without ctx.ui.custom(). */
 	async function pickBlock(
 		ctx: ExtensionContext,
 		title: string,
 		ordered: Array<[number, string]>,
-	): Promise<PickTarget | undefined> {
+	): Promise<ManagerDecision | undefined> {
 		const targets: PickTarget[] = [
 			...ordered.map(([id]): PickTarget => ({ kind: "block", id })),
 			{ kind: "clearAll" },
@@ -778,101 +783,194 @@ export default function (pi: ExtensionAPI): void {
 			const chosen = await ctx.ui.select(title, labels);
 			if (chosen === undefined) return undefined;
 			const index = labels.indexOf(chosen);
-			return index >= 0 ? targets[index] : undefined;
+			if (index < 0) return undefined;
+			const target = targets[index];
+			if (target.kind === "clearAll") return { kind: "clear" };
+			const actions = ["edit text", "remove block", `insert ${markerOf(target.id)} at cursor`];
+			const action = await ctx.ui.select(`Block Q${target.id}`, actions);
+			if (action === undefined) return undefined;
+			if (action === actions[0]) return { kind: "edit", id: target.id };
+			if (action === actions[1]) return { kind: "remove", id: target.id };
+			return { kind: "insert", id: target.id };
 		}
 		const LIST_ROWS = 6; // list pane height (windowed when more targets)
-		const PREVIEW_ROWS = 7; // preview pane height (padded when shorter)
-		return customFn<PickTarget | undefined>(
+		const PREVIEW_ROWS = 6; // preview pane height (padded when shorter)
+		return customFn<ManagerDecision | undefined>(
 			(tui, theme, keybindings, done) => {
-				let index = 0;
+				let view: "pick" | "action" | "confirm" = "pick";
+				let pickIndex = 0;
+				let actionIndex = 0;
+				let confirmIndex = 1; // "no" first: clearing is destructive
 				let cachedWidth: number | undefined;
 				let cachedLines: string[] | undefined;
 				const invalidate = () => {
 					cachedWidth = undefined;
 					cachedLines = undefined;
 				};
+				const activeId = (): number | undefined => {
+					const target = targets[pickIndex];
+					return target?.kind === "block" ? target.id : undefined;
+				};
+				const previewText = (): string[] => {
+					const rows: string[] = [];
+					const target = targets[pickIndex];
+					if (view === "confirm" || target?.kind === "clearAll") {
+						rows.push("Remove every quote block and its marker from the draft.");
+						return rows;
+					}
+					const id = activeId();
+					if (id === undefined) return rows;
+					const content = (store.quotes.get(id) ?? "").replace(/\r\n?/g, "\n").split("\n");
+					const budget = PREVIEW_ROWS - 1; // last row reserved for the "+N more" hint
+					let used = 0;
+					let consumed = 0;
+					for (const source of content) {
+						const wrapped = wrapTextWithAnsi(source.trim() || " ", innerFor(width()));
+						if (used + wrapped.length > budget) break;
+						rows.push(...wrapped);
+						used += wrapped.length;
+						consumed += 1;
+					}
+					const remaining = content.length - consumed;
+					if (remaining > 0) {
+						rows.push(`… +${remaining} more line${remaining > 1 ? "s" : ""} (edit shows all)`);
+					}
+					return rows;
+				};
+				// width memo for previewText (render is the only caller that knows it)
+				let currentWidth = 72;
+				const width = () => currentWidth;
+				const innerFor = (w: number): number => Math.max(10, w - 4);
 				return {
-					render(width: number): string[] {
-						if (cachedLines && cachedWidth === width) return cachedLines;
-						const inner = Math.max(10, width - 4); // "│ " + content + " │"
+					render(w: number): string[] {
+						currentWidth = w;
+						if (cachedLines && cachedWidth === w) return cachedLines;
+						const inner = innerFor(w);
 						const pad = (line: string): string => {
 							const clipped = truncateToWidth(line, inner, "…");
 							return `│ ${clipped}${" ".repeat(Math.max(0, inner - visibleWidth(clipped)))} │`;
 						};
 						const borderRow = (left: string, right: string, label: string, style?: (t: string) => string): string => {
 							const text = style ? style(label) : label;
-							const fill = Math.max(1, width - 4 - visibleWidth(text));
+							const fill = Math.max(1, w - 4 - visibleWidth(text));
 							return `${left}─${text}${"─".repeat(fill)}${right}`;
 						};
 
-						// ─ list pane (windowed around the cursor) ─
-						const windowRows = Math.min(LIST_ROWS, targets.length);
-						const listStart =
-							targets.length <= LIST_ROWS
-								? 0
-								: Math.max(0, Math.min(index - (LIST_ROWS >> 1), targets.length - LIST_ROWS));
+						// ─ list pane (bottom, docked like the native selector) ─
 						const listRows: string[] = [];
-						for (let i = listStart; i < listStart + windowRows; i++) {
-							const selected = i === index;
-							const cursor = selected ? "❯ " : "  ";
-							const label = selected ? theme.fg("accent", labelOf(targets[i])) : labelOf(targets[i]);
-							listRows.push(pad(`${cursor}${label}`));
-						}
-						const titleText =
-							targets.length > LIST_ROWS
-								? ` ❝ ${title} · ${listStart + 1}–${listStart + windowRows} of ${targets.length} `
-								: ` ❝ ${title} `;
-
-						// ─ preview pane (fixed height; source lines wrap, all-or-nothing) ─
-						const previewPlain: string[] = [];
-						const target = targets[index];
-						if (target.kind === "clearAll") {
-							previewPlain.push("Remove every quote block and its marker from the draft.");
+						let listStart = 0;
+						if (view === "pick") {
+							const windowRows = Math.min(LIST_ROWS, targets.length);
+							listStart =
+								targets.length <= LIST_ROWS
+									? 0
+									: Math.max(0, Math.min(pickIndex - (LIST_ROWS >> 1), targets.length - LIST_ROWS));
+							for (let i = listStart; i < listStart + windowRows; i++) {
+								const selected = i === pickIndex;
+								const cursor = selected ? "❯ " : "  ";
+								const label = selected ? theme.fg("accent", labelOf(targets[i])) : labelOf(targets[i]);
+								listRows.push(pad(`${cursor}${label}`));
+							}
+						} else if (view === "action" && activeId() !== undefined) {
+							const actions = [
+								"edit text",
+								"remove block",
+								`insert ${markerOf(activeId() as number)} at cursor`,
+								"back",
+							];
+							actions.forEach((action, i) => {
+								const selected = i === actionIndex;
+								const cursor = selected ? "❯ " : "  ";
+								const label = selected ? theme.fg("accent", action) : action;
+								listRows.push(pad(`${cursor}${label}`));
+							});
 						} else {
-							const content = (store.quotes.get(target.id) ?? "").replace(/\r\n?/g, "\n").split("\n");
-							const budget = PREVIEW_ROWS - 1; // last row reserved for the "+N more" hint
-							let used = 0;
-							let consumed = 0;
-							for (const source of content) {
-								const wrapped = wrapTextWithAnsi(source.trim() || " ", inner);
-								if (used + wrapped.length > budget) break;
-								previewPlain.push(...wrapped);
-								used += wrapped.length;
-								consumed += 1;
-							}
-							const remaining = content.length - consumed;
-							if (remaining > 0) {
-								previewPlain.push(`… +${remaining} more line${remaining > 1 ? "s" : ""} (edit shows all)`);
-							}
+							const options = ["yes — remove all blocks", "no — keep them"];
+							options.forEach((option, i) => {
+								const selected = i === confirmIndex;
+								const cursor = selected ? "❯ " : "  ";
+								const label = selected ? theme.fg("accent", option) : option;
+								listRows.push(pad(`${cursor}${label}`));
+							});
 						}
-						while (previewPlain.length < PREVIEW_ROWS) previewPlain.push("");
+						while (listRows.length < LIST_ROWS) listRows.push(pad(""));
+
+						// ─ preview pane (floating above the list) ─
+						const previewRows = previewText();
+						while (previewRows.length < PREVIEW_ROWS) previewRows.push("");
+
+						const titleText =
+							view === "pick" && targets.length > LIST_ROWS
+								? ` ❝ ${title} · ${listStart + 1}–${listStart + Math.min(LIST_ROWS, targets.length)} of ${targets.length} `
+								: ` ❝ ${title} `;
+						const sectionLabel =
+							view === "pick" ? " pick a block " : view === "action" ? " choose an action " : " confirm ";
+						const hints =
+							view === "pick"
+								? " ↑↓ move · Enter select · Esc cancel "
+								: " ↑↓ move · Enter run · Esc back ";
 
 						const lines = [
 							borderRow("╭", "╮", titleText, (t) => theme.fg("accent", t)),
+							...previewRows.map((row) => pad(theme.fg("dim", row))),
+							borderRow("├", "┤", sectionLabel, (t) => theme.fg("dim", t)),
 							...listRows,
-							borderRow("├", "┤", " preview ", (t) => theme.fg("dim", t)),
-							...previewPlain.map((row) => pad(theme.fg("dim", row))),
-							borderRow("╰", "╯", " ↑↓ move · Enter select · Esc cancel ", (t) => theme.fg("dim", t)),
+							borderRow("╰", "╯", hints, (t) => theme.fg("dim", t)),
 						];
-						cachedWidth = width;
+						cachedWidth = w;
 						cachedLines = lines;
 						return lines;
 					},
 					handleInput(data: string): void {
+							const move = (delta: number) => {
+							if (view === "pick") pickIndex = (pickIndex + delta + targets.length) % targets.length;
+							else if (view === "action") actionIndex = (actionIndex + delta + 4) % 4;
+							else confirmIndex = (confirmIndex + delta + 2) % 2;
+						};
 						if (keybindings.matches(data, "tui.select.up")) {
-							index = (index - 1 + targets.length) % targets.length;
+							move(-1);
 						} else if (keybindings.matches(data, "tui.select.down")) {
-							index = (index + 1) % targets.length;
-						} else if (keybindings.matches(data, "tui.select.pageUp")) {
-							index = Math.max(0, index - 5);
-						} else if (keybindings.matches(data, "tui.select.pageDown")) {
-							index = Math.min(targets.length - 1, index + 5);
+							move(1);
+						} else if (view === "pick" && keybindings.matches(data, "tui.select.pageUp")) {
+							pickIndex = Math.max(0, pickIndex - 5);
+						} else if (view === "pick" && keybindings.matches(data, "tui.select.pageDown")) {
+							pickIndex = Math.min(targets.length - 1, pickIndex + 5);
 						} else if (keybindings.matches(data, "tui.select.confirm")) {
-							done(targets[index]);
-							return;
+							if (view === "pick") {
+								const target = targets[pickIndex];
+								if (target.kind === "clearAll") {
+									view = "confirm";
+									confirmIndex = 1;
+								} else {
+									view = "action";
+									actionIndex = 0;
+								}
+							} else if (view === "action") {
+								const id = activeId();
+								if (actionIndex === 3 || id === undefined) {
+									view = "pick";
+								} else if (actionIndex === 0) {
+									done({ kind: "edit", id });
+									return;
+								} else if (actionIndex === 1) {
+									done({ kind: "remove", id });
+									return;
+								} else {
+									done({ kind: "insert", id });
+									return;
+								}
+							} else if (confirmIndex === 0) {
+								done({ kind: "clear" });
+								return;
+							} else {
+								view = "pick";
+							}
 						} else if (keybindings.matches(data, "tui.select.cancel")) {
-							done(undefined);
-							return;
+							if (view === "pick") {
+								done(undefined);
+								return;
+							}
+							view = "pick";
 						} else {
 							return;
 						}
@@ -884,7 +982,7 @@ export default function (pi: ExtensionAPI): void {
 			},
 			{
 				overlay: true,
-				overlayOptions: { anchor: "center", width: "60%", minWidth: 46, maxHeight: 24 },
+				overlayOptions: { anchor: "bottom-center", width: "60%", minWidth: 46, maxHeight: 24, margin: 4 },
 			},
 		);
 	}
@@ -899,26 +997,18 @@ export default function (pi: ExtensionAPI): void {
 		const ordered = [...store.quotes.entries()].sort(
 			(a, b) => draft.indexOf(markerOf(a[0])) - draft.indexOf(markerOf(b[0])),
 		);
-		const picked = await pickBlock(ctx, "Quote blocks — Alt+E manager", ordered);
-		if (!picked) return; // Esc cancels
-		if (picked.kind === "clearAll") {
-			if (await ctx.ui.confirm("Clear all", "Remove every quote block and its marker?")) {
-				clearAllBlocks(ctx);
-			}
-			return;
-		}
-		const id = picked.id;
-		const insertLabel = `insert ${markerOf(id)} at cursor`;
-		const action = await ctx.ui.select(`Block Q${id}`, ["edit text", "remove block", insertLabel]);
-		if (action === undefined) return;
-		if (action === "edit text") {
-			await editBlock(ctx, id);
-		} else if (action === "remove block") {
-			removeBlock(ctx, id);
-			ctx.ui.notify(`Block Q${id} removed`, "info");
-		} else if (action === insertLabel) {
-			insertMarker(ctx, markerOf(id));
-			ctx.ui.notify(`Inserted ${markerOf(id)}`, "info");
+		const decision = await pickBlock(ctx, "Quote blocks", ordered);
+		if (!decision) return; // Esc cancels
+		if (decision.kind === "clear") {
+			clearAllBlocks(ctx);
+		} else if (decision.kind === "edit") {
+			await editBlock(ctx, decision.id);
+		} else if (decision.kind === "remove") {
+			removeBlock(ctx, decision.id);
+			ctx.ui.notify(`Block Q${decision.id} removed`, "info");
+		} else {
+			insertMarker(ctx, markerOf(decision.id));
+			ctx.ui.notify(`Inserted ${markerOf(decision.id)}`, "info");
 		}
 	}
 

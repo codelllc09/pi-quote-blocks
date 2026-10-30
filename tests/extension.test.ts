@@ -350,8 +350,8 @@ describe("extension factory", () => {
 
 		expect(h.customRenderLines.length).toBe(shortRows);
 		const preview = h.customRenderLines.join("\n");
-		expect(preview).toContain("five"); // first 6 source lines fit
-		expect(preview).toContain("+2 more lines"); // 8 - 6 shown
+		expect(preview).toContain("five"); // first 5 source lines fit
+		expect(preview).toContain("+3 more lines"); // 8 - 5 shown
 		expect(preview).not.toContain("seven"); // beyond the budget
 	});
 
@@ -362,8 +362,7 @@ describe("extension factory", () => {
 		await h.commands.quote.handler("", h.ctx);
 		h.draft = "typing about [Q1] right now";
 
-		h.customKeys.push("tui.select.confirm"); // first target = Q1
-		h.selectQueue.push("edit text");
+		h.customKeys.push("tui.select.confirm", "tui.select.confirm"); // pick Q1 → edit text (index 0)
 		h.editorNext = "revised text";
 		await h.shortcuts["alt+e"].handler(h.ctx);
 
@@ -383,8 +382,13 @@ describe("extension factory", () => {
 		await h.commands.quote.handler("", h.ctx);
 		h.draft = "keep  spacing [Q1] and [Q2] done";
 
-		h.customKeys.push("tui.select.down", "tui.select.down", "tui.select.confirm"); // → clear all
-		h.confirmQueue.push(true);
+		h.customKeys.push(
+			"tui.select.down", // Q1 → Q2
+			"tui.select.down", // Q2 → clear all
+			"tui.select.confirm", // → confirm view (defaults to "no")
+			"tui.select.up", // no → yes
+			"tui.select.confirm", // clear
+		);
 		await h.shortcuts["alt+e"].handler(h.ctx);
 
 		expect(h.draft).toBe("keep  spacing and done");
@@ -399,8 +403,12 @@ describe("extension factory", () => {
 		await h.commands.quote.handler("", h.ctx);
 		h.draft = "text without marker";
 
-		h.customKeys.push("tui.select.confirm"); // Q1
-		h.selectQueue.push("insert [Q1] at cursor");
+		h.customKeys.push(
+			"tui.select.confirm", // pick Q1
+			"tui.select.down", // edit → remove
+			"tui.select.down", // remove → insert
+			"tui.select.confirm", // insert [Q1] at cursor
+		);
 		await h.shortcuts["alt+e"].handler(h.ctx);
 
 		expect(h.draft).toBe("text without marker[Q1]");

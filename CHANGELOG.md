@@ -9,13 +9,15 @@
   also reachable from a shortcut: pick a block, then edit its text,
   remove it, re-insert its marker at the cursor, or clear all. The
   dialogs overlay the editor; the draft is never touched.
-- The block picker is a floating overlay window (drawn above the
-  transcript — no full-screen takeover) with a live preview pane:
-  fixed window height (list and preview panes pad/scroll, so moving
-  the cursor never shifts the layout), dim wrapped preview of the
-  highlighted block, `+N more` indicator, title and key hints in the
-  window borders. Falls back to `ctx.ui.select` where `ctx.ui.custom`
-  is unavailable.
+- The block picker is an overlay window docked above the editor — the
+  same place pi's native select appears — with the live preview pane
+  floating above the list. The whole flow (pick → action → confirm)
+  stays inside this one window; only the multi-line text editor opens
+  after it closes, so no dialog nesting and no jump back to the bottom
+  bar mid-flow. Fixed pane heights (cursor moves recolor one row and
+  swap preview text in place), dim wrapped preview, `+N more`
+  indicator, clear-all confirm defaults to "no". Falls back to
+  `ctx.ui.select` where `ctx.ui.custom` is unavailable.
 - `/quote [n]` — quote the nth-last assistant reply from session history as
   a block (public `sessionManager.getBranch()` API; default: the last reply).
   Keyboard-only quoting, no mouse selection needed.
