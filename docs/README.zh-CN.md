@@ -34,7 +34,7 @@
 | `Alt+Shift+Q` | 折叠 / 展开所有块 |
 | `Alt+E` | 打字途中管理引用块：选块后可编辑 / 删除 / 重插 marker / 全部清空 |
 | `/quote` · `/quote 2` | 将上一条 / 倒数第二条回复整段建为引用块 |
-| `/quotes` | 列出块；子命令 `clear` / `fold` / `unfold` / `edit Qn` / `remove Qn` / `preview` |
+| `/quotes` | 打开块管理器（同 Alt+E 对话框）；子命令 `clear` / `fold` / `unfold` / `edit Qn` / `remove Qn` / `preview` |
 | `/quotes edit Q1` | 编辑引用块内容（可删无关行） |
 | `/quotes remove Q1` | 删除单个引用块（连 marker 一起清掉） |
 | `/quotes preview` | 预览提交时实际展开的文本 |

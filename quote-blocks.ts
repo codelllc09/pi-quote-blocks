@@ -21,8 +21,8 @@
  * Shortcuts: Alt+Q quote selection; Alt+Shift+Q fold/expand; Alt+E manage
  * Fallback:  Alt+Q with no readable selection quotes the system clipboard
  *            (Pi copy-on-select keeps it in sync); PI_QUOTE_CLIPBOARD=0 off
- * Commands:  /quote-selection (Alt+Q) · /quote [n] (nth-last assistant reply)
- *            /quotes [clear|fold|unfold|edit Qn|remove Qn|preview]
+ * Commands:  /quote [n] (nth-last assistant reply) · /quotes (opens the Alt+E
+ *            manager; subcommands clear|fold|unfold|edit|remove|preview)
  * Folding:   auto-collapse to one line beyond PI_QUOTE_FOLD_LINES (default 8)
  *
  * Design notes from debugging history (2026-10):
@@ -494,10 +494,6 @@ export default function (pi: ExtensionAPI): void {
 		description: "Quote selected text (or clipboard) as a block",
 		handler: async (ctx) => quoteSelection(ctx),
 	});
-	pi.registerCommand("quote-selection", {
-		description: "Quote the active selection or clipboard as a block (Alt+Q)",
-		handler: async (_args, ctx) => quoteSelection(ctx),
-	});
 
 	// ---- Fold toggle: Alt+Shift+Q ----
 	function toggleFold(ctx: ExtensionContext): void {
@@ -660,8 +656,7 @@ export default function (pi: ExtensionAPI): void {
 	}
 
 	pi.registerCommand("quotes", {
-		description:
-			"Manage quote blocks (/quotes · clear · fold · unfold · edit Qn · remove Qn · preview)",
+		description: "Manage quote blocks (opens the Alt+E manager; or clear/fold/unfold/edit/remove/preview)",
 		handler: async (args, ctx) => {
 			const parts = args.trim().toLowerCase().split(/\s+/).filter(Boolean);
 			const sub = parts[0] ?? "";
@@ -724,6 +719,11 @@ export default function (pi: ExtensionAPI): void {
 				} else {
 					ctx.ui.notify(text, "info");
 				}
+				return;
+			}
+			// No args: open the Alt+E manager; notify-list when dialogs are unavailable.
+			if (ctx.hasUI && ctx.mode === "tui") {
+				await manageBlocks(ctx);
 				return;
 			}
 			if (!store.quotes.size) {

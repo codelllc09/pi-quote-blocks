@@ -24,6 +24,14 @@
   this path needs no renderer internals. `PI_QUOTE_CLIPBOARD=0` disables it.
 - Widget cards render in draft marker (anchor) order.
 
+### Changed
+
+- `/quote-selection` removed — it ran the exact Alt+Q handler under a name
+  easily confused with `/quote`; the slash menu now shows two entries
+  (`/quote`, `/quotes`) instead of three.
+- Bare `/quotes` opens the `Alt+E` block manager instead of a plain
+  notify list (non-TUI modes keep the list).
+
 ### Fixed
 
 - `/quotes clear` collapsed every run of spaces in the whole draft (code

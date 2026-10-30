@@ -107,8 +107,9 @@ describe("extension factory", () => {
 		const h = harness();
 		expect(Object.keys(h.shortcuts)).toEqual(expect.arrayContaining(["alt+q", "alt+shift+q", "alt+e"]));
 		expect(Object.keys(h.commands)).toEqual(
-			expect.arrayContaining(["quote", "quote-selection", "quotes"]),
+			expect.arrayContaining(["quote", "quotes"]),
 		);
+		expect(Object.keys(h.commands)).not.toContain("quote-selection");
 		expect(Object.keys(h.events)).toEqual(
 			expect.arrayContaining(["input", "session_start", "session_shutdown"]),
 		);
@@ -242,6 +243,20 @@ describe("extension factory", () => {
 		const headers = h.render().filter((line) => line.startsWith("❝"));
 		expect(headers[0]).toContain("Q2");
 		expect(headers[1]).toContain("Q1");
+	});
+
+	it("bare /quotes opens the Alt+E manager (menu-discoverable path)", async () => {
+		const h = harness();
+		await h.events.session_start({ type: "session_start" }, h.ctx);
+		h.branch = [{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "one" }] } }];
+		await h.commands.quote.handler("", h.ctx);
+		h.draft = "about [Q1]";
+		h.selectQueue.push(undefined); // cancel at the picker
+		await h.commands.quotes.handler("", h.ctx);
+		expect(h.selectCalls).toHaveLength(1);
+		expect(h.selectCalls[0]?.[1][0]).toContain("Q1");
+		expect(h.selectCalls[0]?.[1]).toContain("── clear all blocks ──");
+		expect(h.draft).toBe("about [Q1]"); // untouched
 	});
 
 	it("Alt+E edits a block mid-composition without touching the draft", async () => {
