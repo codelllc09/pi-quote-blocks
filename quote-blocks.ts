@@ -49,7 +49,10 @@ export const REVIEWED_PI_VERSIONS = ["1.0.3", "1.4.0"];
 export const SHORTCUT = "alt+q";
 const WIDGET_KEY = "quote-blocks";
 const MAX_PREVIEW_LINES = 2;
-const FOLD_THRESHOLD = Number(process.env.PI_QUOTE_FOLD_LINES ?? 8);
+const foldThresholdEnv = Number.parseInt(process.env.PI_QUOTE_FOLD_LINES ?? "", 10);
+/** Auto-fold beyond this many card lines. Invalid or missing env falls back to 8
+ * (a NaN threshold would make the comparison always false and silently kill folding). */
+const FOLD_THRESHOLD = Number.isFinite(foldThresholdEnv) ? foldThresholdEnv : 8;
 const DEBUG_LOG = process.env.PI_QUOTE_DEBUG_LOG ?? "/tmp/quote-blocks-debug.log";
 /** Debug log: only written when PI_QUOTE_DEBUG=1; zero I/O otherwise. */
 const DEBUG = process.env.PI_QUOTE_DEBUG === "1";
@@ -207,6 +210,23 @@ export function expandMarker(text: string, marker: string, quote: string): strin
 			return seg + part;
 		})
 		.join("");
+}
+
+/** Remove `[Qn]` markers from a draft. A marker run ("[Q1] [Q2]") is removed
+ * whole and takes at most one adjacent space with it, so spacing the user
+ * typed elsewhere — code indentation in particular — is never touched. */
+export function stripMarkers(draft: string, markers: string[]): string {
+	if (markers.length === 0) return draft;
+	const alt = [...new Set(markers)]
+		.map((marker) => marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+		.join("|");
+	// A whole run is one match; the callback keeps exactly one of the spaces
+	// that may surround it, so unrelated spacing is never squeezed.
+	return draft.replace(new RegExp(` ?(?:${alt})(?: ?(?:${alt}))* ?`, "g"), (match) => {
+		const hasLead = match.startsWith(" ");
+		const hasTrail = match.endsWith(" ");
+		return hasLead && hasTrail ? " " : "";
+	});
 }
 
 /** Focused component, only if it is the prompt editor with cursor APIs; else undefined. */
@@ -427,10 +447,11 @@ export default function (pi: ExtensionAPI): void {
 					return;
 				}
 				let draft = ctx.ui.getEditorText();
-				for (const id of store.quotes.keys()) {
-					draft = draft.split(markerOf(id)).join("");
-				}
-				ctx.ui.setEditorText(draft.replace(/ {2,}/g, " ").replace(/ $/gm, ""));
+				draft = stripMarkers(
+					draft,
+					[...store.quotes.keys()].map((id) => markerOf(id)),
+				);
+				ctx.ui.setEditorText(draft);
 				store.quotes.clear();
 				store.nextId = 1;
 				foldOverride = undefined;
