@@ -18,7 +18,8 @@
  *   ────────────────────────────────
  *   ❯ [Q1] is this right? [Q2] and this?   ← draft: short markers only
  *
- * Shortcuts: Alt+Q quote selection; Alt+F fold/expand; Alt+E manage
+ * Shortcuts: Alt+Q quote · Alt+F fold · Alt+E manage — all remappable per
+ *            terminal via PI_QUOTE_KEY_{QUOTE,FOLD,MANAGE} (comma lists ok)
  * Fallback:  Alt+Q with no readable selection quotes the system clipboard
  *            (Pi copy-on-select keeps it in sync); PI_QUOTE_CLIPBOARD=0 off
  * Commands:  /quote [n] (nth-last assistant reply) · /quotes (opens the Alt+E
@@ -50,13 +51,13 @@ import {
 	type ExtensionContext,
 	type ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi, type KeyId } from "@earendil-works/pi-tui";
 
 export const MIN_PI_VERSION = "1.0.3";
 /** Pi versions verified against the renderer/editor APIs used below.
  * Re-verify after each Pi release before adding it here. */
 export const REVIEWED_PI_VERSIONS = ["1.0.3", "1.4.0"];
-export const SHORTCUT = "alt+q";
+export const SHORTCUT = "alt+q"; // default quote key; remap via PI_QUOTE_KEY_QUOTE
 const WIDGET_KEY = "quote-blocks";
 const MAX_PREVIEW_LINES = 2;
 const foldThresholdEnv = Number.parseInt(process.env.PI_QUOTE_FOLD_LINES ?? "", 10);
@@ -66,6 +67,44 @@ const FOLD_THRESHOLD = Number.isFinite(foldThresholdEnv) ? foldThresholdEnv : 8;
 /** Clipboard fallback for Alt+Q when live selection is unavailable
  * (unreviewed Pi version, regular mode, renderer API change). */
 const CLIPBOARD_FALLBACK = process.env.PI_QUOTE_CLIPBOARD !== "0";
+
+/** Default shortcut keys, remappable per terminal (e.g. a WezTerm pane env)
+ * via PI_QUOTE_KEY_QUOTE / PI_QUOTE_KEY_FOLD / PI_QUOTE_KEY_MANAGE — a
+ * comma-separated list binds several keys to one action. pi 1.4.0 has no
+ * built-in rebinding for extension shortcuts (keybindings.json only remaps
+ * named built-in actions), so this is the extension's own config layer. */
+const KEY_DEFAULTS = {
+	quote: "alt+q",
+	fold: "alt+f",
+	manage: "alt+e",
+} as const;
+type KeyAction = keyof typeof KEY_DEFAULTS;
+
+/** Keys bound to an action: env override (lowercased like pi's shortcut ids,
+ * de-duplicated), falling back to the default when unset or empty. */
+export function keysFor(action: KeyAction): KeyId[] {
+	const raw = process.env[`PI_QUOTE_KEY_${action.toUpperCase()}`] ?? KEY_DEFAULTS[action];
+	const keys = [...new Set(raw.split(",").map((key) => key.trim().toLowerCase()).filter(Boolean))];
+	return keys.length > 0 ? (keys as KeyId[]) : [KEY_DEFAULTS[action]];
+}
+
+/** pi-tui 1.4.0 cannot match alt+shift+letter/digit in ANY encoding (legacy
+ * ESC+uppercase has no key id; kitty CSI-u forms collapse the shifted letter
+ * onto the base key and collide with plain alt+<key>) — warn rather than let
+ * a configured key sit silently dead. */
+const DEAD_KEY_PATTERN = /^alt\+shift\+[a-z0-9]$/;
+function warnDeadKeys(ctx: ExtensionContext): void {
+	const dead = (Object.keys(KEY_DEFAULTS) as KeyAction[]).flatMap((action) =>
+		keysFor(action).filter((key) => DEAD_KEY_PATTERN.test(key)).map((key) => `${action}: ${key}`),
+	);
+	if (dead.length > 0 && ctx.hasUI) {
+		ctx.ui.notify(
+			`Quote blocks: these configured keys match no terminal encoding in pi-tui 1.4.0 and stay dead: ${dead.join(", ")}. Use alt+<key>, ctrl+alt+<key>, … instead.`,
+			"warning",
+		);
+	}
+}
+
 const DEBUG_LOG = process.env.PI_QUOTE_DEBUG_LOG ?? "/tmp/quote-blocks-debug.log";
 /** Debug log: only written when PI_QUOTE_DEBUG=1; zero I/O otherwise. */
 const DEBUG = process.env.PI_QUOTE_DEBUG === "1";
@@ -362,7 +401,7 @@ export default function (pi: ExtensionAPI): void {
 		const shouldFold = foldOverride === "folded" || (foldOverride !== "expanded" && totalLines > FOLD_THRESHOLD);
 
 		if (shouldFold) {
-			const summary = `❝❝❝ ${store.quotes.size} quote blocks · ${totalLines} lines · alt+f expand`;
+			const summary = `❝❝❝ ${store.quotes.size} quote blocks · ${totalLines} lines · ${keysFor("fold")[0]} expand`;
 			const line = truncateToWidth(fg("accent", summary), width, fg("dim", "…"));
 			cachedWidth = width;
 			cachedLines = [line];
@@ -490,10 +529,12 @@ export default function (pi: ExtensionAPI): void {
 		dbg(`createBlock: Q${id} ${lines} lines from ${source}`);
 	}
 
-	pi.registerShortcut(SHORTCUT, {
-		description: "Quote selected text (or clipboard) as a block",
-		handler: async (ctx) => quoteSelection(ctx),
-	});
+	for (const key of keysFor("quote")) {
+		pi.registerShortcut(key, {
+			description: "Quote selected text (or clipboard) as a block",
+			handler: async (ctx) => quoteSelection(ctx),
+		});
+	}
 
 	// ---- Fold toggle: Alt+F ----
 	function toggleFold(ctx: ExtensionContext): void {
@@ -506,10 +547,12 @@ export default function (pi: ExtensionAPI): void {
 		ctx.ui.notify(foldOverride === "expanded" ? "Quote blocks expanded" : "Quote blocks folded", "info");
 	}
 
-	pi.registerShortcut("alt+f", {
-		description: "Fold / expand quote blocks",
-		handler: async (ctx) => toggleFold(ctx),
-	});
+	for (const key of keysFor("fold")) {
+		pi.registerShortcut(key, {
+			description: "Fold / expand quote blocks",
+			handler: async (ctx) => toggleFold(ctx),
+		});
+	}
 	// Alt+Shift+Q is NOT registered, verified against pi-tui 1.4.0's matcher:
 	// - legacy encoding (ESC + uppercase Q) has no key id — matchesKey false
 	// - kitty CSI-u forms ("\x1b[113:81;3u", "\x1b[113;3u") normalize the
@@ -1035,10 +1078,12 @@ export default function (pi: ExtensionAPI): void {
 		}
 	}
 
-	pi.registerShortcut("alt+e", {
-		description: "Manage quote blocks: preview, edit, remove, re-insert marker, or clear all",
-		handler: async (ctx) => manageBlocks(ctx),
-	});
+	for (const key of keysFor("manage")) {
+		pi.registerShortcut(key, {
+			description: "Manage quote blocks: preview, edit, remove, re-insert marker, or clear all",
+			handler: async (ctx) => manageBlocks(ctx),
+		});
+	}
 
 	// ---- Expand markers on submit ----
 	pi.on("input", async (event) => {
@@ -1095,6 +1140,7 @@ export default function (pi: ExtensionAPI): void {
 		cachedLines = undefined;
 		foldOverride = undefined;
 		installWidget(ctx);
+		warnDeadKeys(ctx);
 	});
 
 	pi.on("session_shutdown", async () => {

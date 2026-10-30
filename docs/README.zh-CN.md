@@ -49,6 +49,13 @@
 | `PI_QUOTE_DEBUG` | 关 | `=1` 开启调试日志（`/tmp/quote-blocks-debug.log`） |
 | `PI_QUOTE_DEBUG_LOG` | `/tmp/quote-blocks-debug.log` | 日志路径 |
 | `PI_QUOTE_ALLOW_UNREVIEWED` | 关 | `=1` 跳过版本白名单（自担风险） |
+| `PI_QUOTE_KEY_QUOTE` | `alt+q` | 引用选区的键位（逗号分隔可绑多键） |
+| `PI_QUOTE_KEY_FOLD` | `alt+f` | 折叠/展开的键位 |
+| `PI_QUOTE_KEY_MANAGE` | `alt+e` | 块管理器的键位 |
+
+键位格式同 pi 的 key-id（`alt+q`、`ctrl+alt+j` …）。默认键与你的终端/壳冲突时可按终端设置（如 WezTerm pane env、direnv）。
+`alt+shift+<字母>` 在 pi-tui 1.4.0 中无法匹配任何编码（传统编码无 key id；kitty CSI-u 会归一到 `alt+<键>` 上），
+配置了会在启动时警告；与 pi 保留内置键冲突的键位会被跳过并记录冲突诊断。
 
 ## 安装
 

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { matchesKey } from "@earendil-works/pi-tui";
-import factory from "../quote-blocks";
+import factory, { keysFor } from "../quote-blocks";
 
 /** Minimal mock of the extension runtime: captures registrations. */
 function harness() {
@@ -138,6 +138,49 @@ function harness() {
 		lastNote: () => notes[notes.length - 1]?.[1] ?? "",
 	};
 }
+
+describe("shortcut configuration (PI_QUOTE_KEY_*)", () => {
+	const ENV_VARS = ["PI_QUOTE_KEY_QUOTE", "PI_QUOTE_KEY_FOLD", "PI_QUOTE_KEY_MANAGE"] as const;
+
+	afterEach(() => {
+		for (const name of ENV_VARS) delete process.env[name];
+	});
+
+	it("defaults to alt+q / alt+f / alt+e", () => {
+		expect(keysFor("quote")).toEqual(["alt+q"]);
+		expect(keysFor("fold")).toEqual(["alt+f"]);
+		expect(keysFor("manage")).toEqual(["alt+e"]);
+	});
+
+	it("env override: single key, comma list, normalization, empty fallback", () => {
+		process.env.PI_QUOTE_KEY_FOLD = "ctrl+alt+f";
+		expect(keysFor("fold")).toEqual(["ctrl+alt+f"]);
+
+		process.env.PI_QUOTE_KEY_FOLD = " Alt+R , alt+r , ctrl+alt+j ";
+		expect(keysFor("fold")).toEqual(["alt+r", "ctrl+alt+j"]); // trimmed, lowercased, deduped
+
+		process.env.PI_QUOTE_KEY_FOLD = "  ";
+		expect(keysFor("fold")).toEqual(["alt+f"]); // empty → default
+	});
+
+	it("configured keys are what get registered", () => {
+		process.env.PI_QUOTE_KEY_MANAGE = "alt+m,ctrl+alt+m";
+		const h = harness();
+		expect(Object.keys(h.shortcuts)).toEqual(
+			expect.arrayContaining(["alt+m", "ctrl+alt+m"]),
+		);
+		expect(Object.keys(h.shortcuts)).not.toContain("alt+e");
+	});
+
+	it("configured alt+shift+letter warns as a dead binding at session start", async () => {
+		process.env.PI_QUOTE_KEY_MANAGE = "alt+shift+e";
+		const h = harness();
+		await h.events.session_start({ type: "session_start" }, h.ctx);
+		const warning = h.notes.find(([type]) => type === "warning")?.[1] ?? "";
+		expect(warning).toContain("alt+shift+e");
+		expect(warning).toContain("dead");
+	});
+});
 
 describe("extension factory", () => {
 	afterEach(() => {

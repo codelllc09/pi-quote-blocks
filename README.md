@@ -53,6 +53,16 @@ extension gets the same effect with three layers:
 | `PI_QUOTE_DEBUG` | off | `=1` enables the debug log |
 | `PI_QUOTE_DEBUG_LOG` | `/tmp/quote-blocks-debug.log` | Log path |
 | `PI_QUOTE_ALLOW_UNREVIEWED` | off | `=1` skips the reviewed-version allowlist |
+| `PI_QUOTE_KEY_QUOTE` | `alt+q` | Key(s) for quote-selection (comma-separated list ok) |
+| `PI_QUOTE_KEY_FOLD` | `alt+f` | Key(s) for fold/expand |
+| `PI_QUOTE_KEY_MANAGE` | `alt+e` | Key(s) for the block manager |
+
+Keys use pi's key-id format (`alt+q`, `ctrl+alt+j`, …). Set them per
+terminal — e.g. in a WezTerm pane env or direnv — when a default collides
+with your terminal or shell. `alt+shift+<letter>` matches no encoding in
+pi-tui 1.4.0 (legacy has no key id; kitty CSI-u collapses onto `alt+<key>`)
+and warns at startup; keys colliding with reserved pi built-ins are
+skipped with a conflict diagnostic.
 
 ## Install
 

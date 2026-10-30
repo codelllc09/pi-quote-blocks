@@ -4,6 +4,15 @@
 
 ### Added
 
+- Configurable shortcut keys: `PI_QUOTE_KEY_QUOTE` / `PI_QUOTE_KEY_FOLD` /
+  `PI_QUOTE_KEY_MANAGE` (defaults `alt+q` / `alt+f` / `alt+e`, comma-
+  separated lists bind several keys). pi 1.4.0 has no built-in
+  rebinding for extension shortcuts, so the extension carries its own
+  env-based layer — set per terminal when a default collides. The
+  folded-card hint follows the configured fold key, and configured
+  `alt+shift+<letter/digit>` keys warn at startup (dead in every
+  encoding in pi-tui 1.4.0).
+
 - `Alt+E` block manager. Slash commands cannot fire while composing
   (the draft no longer starts with `/`), so edit / remove / clear are
   also reachable from a shortcut: pick a block, then edit its text,
