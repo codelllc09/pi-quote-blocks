@@ -1,6 +1,6 @@
 {
   "name": "pi-quote-blocks",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Codex-style quote blocks for Pi: select a passage, get a block card above the editor, expand on submit",
   "license": "MIT",
   "files": [

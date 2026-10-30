@@ -18,7 +18,7 @@
  *   ────────────────────────────────
  *   ❯ [Q1] is this right? [Q2] and this?   ← draft: short markers only
  *
- * Shortcuts: Alt+Q quote · Alt+F fold · Alt+E manage — all remappable per
+ * Shortcuts: Alt+Q quote · Alt+H fold · Alt+E manage — all remappable per
  *            terminal via PI_QUOTE_KEY_{QUOTE,FOLD,MANAGE} (comma lists ok)
  * Fallback:  Alt+Q with no readable selection quotes the system clipboard
  *            (Pi copy-on-select keeps it in sync); PI_QUOTE_CLIPBOARD=0 off
@@ -73,9 +73,14 @@ const CLIPBOARD_FALLBACK = process.env.PI_QUOTE_CLIPBOARD !== "0";
  * comma-separated list binds several keys to one action. pi 1.4.0 has no
  * built-in rebinding for extension shortcuts (keybindings.json only remaps
  * named built-in actions), so this is the extension's own config layer. */
+// Fold default is alt+h, NOT alt+f: pi binds alt+f to
+// tui.editor.cursorWordRight (word-jump) in its default keymap, and a
+// non-reserved collision means the extension steals the editor key and pi
+// prints a conflict diagnostic on every start. alt+h is free across the
+// standard and Windows default sets (verified against KEYBINDINGS 1.4.0).
 const KEY_DEFAULTS = {
 	quote: "alt+q",
-	fold: "alt+f",
+	fold: "alt+h",
 	manage: "alt+e",
 } as const;
 type KeyAction = keyof typeof KEY_DEFAULTS;

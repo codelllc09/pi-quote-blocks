@@ -30,7 +30,7 @@ pi install npm:pi-quote-blocks
 | `Alt+Q` 无选区 | 回退读系统剪贴板（pi 拖选自动复制，默认开启） |
 | `/quote [n]` | 引用倒数第 n 条回复（默认最后一条） |
 | `Alt+E` | 块管理器——停靠窗口、实时预览；`e` 编辑 · `r` 删除 · `i` 重插 marker · Enter 更多 |
-| `Alt+F` | 折叠 / 展开卡片 |
+| `Alt+H` | 折叠 / 展开卡片 |
 | 发送 | 标记展开为 `> 引用`，未引用的块清除 |
 
 `/quotes` 打开同一管理器（子命令：`clear` `fold` `unfold` `edit Qn`
@@ -41,15 +41,16 @@ pi install npm:pi-quote-blocks
 
 | 环境变量 | 默认 | 说明 |
 |---|---|---|
-| `PI_QUOTE_KEY_QUOTE` · `_FOLD` · `_MANAGE` | `alt+q` · `alt+f` · `alt+e` | 各动作键位；逗号分隔可绑多键 |
+| `PI_QUOTE_KEY_QUOTE` · `_FOLD` · `_MANAGE` | `alt+q` · `alt+h` · `alt+e` | 各动作键位；逗号分隔可绑多键 |
 | `PI_QUOTE_FOLD_LINES` | `8` | 卡片总行数超过即自动折叠 |
 | `PI_QUOTE_CLIPBOARD` | 开 | `=0` 关闭剪贴板回退 |
 | `PI_QUOTE_ALLOW_UNREVIEWED` | 关 | `=1` 跳过版本白名单 |
 | `PI_QUOTE_DEBUG` / `PI_QUOTE_DEBUG_LOG` | 关 / `/tmp/quote-blocks-debug.log` | 调试日志 |
 
-键位格式同 pi 的 key-id；默认键与终端/壳冲突时可按终端设置
-（WezTerm pane env、direnv 等）。`alt+shift+<字母>` 在 pi-tui 1.4.0
-中无法匹配任何编码，配置后启动时会警告。
+键位格式同 pi 的 key-id；默认键冲突时可按终端设置（WezTerm pane env、direnv 等）。
+折叠默认用 `alt+h`，因为 pi 把 `alt+f` 给了编辑器按词右移；Windows 上
+`alt+q` 与 pi 的消息出队键重叠（可换键）。`alt+shift+<字母>` 在
+pi-tui 1.4.0 中无法匹配任何编码，配置后启动时会警告。
 
 ## 工作方式
 

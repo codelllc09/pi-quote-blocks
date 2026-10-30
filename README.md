@@ -31,7 +31,7 @@ Or from source: `pi install git:github.com/codelllc09/pi-quote-blocks`
 | `Alt+Q` without a selection | Falls back to the clipboard (pi's copy-on-select keeps it in sync) |
 | `/quote [n]` | Quote the nth-last assistant reply (default: last) |
 | `Alt+E` | Block manager — docked window, live preview; `e` edit · `r` remove · `i` insert marker · Enter for more |
-| `Alt+F` | Fold / expand cards |
+| `Alt+H` | Fold / expand cards |
 | Submit | Markers expand to `> quotes`; unreferenced blocks are dropped |
 
 `/quotes` opens the same manager (subcommands: `clear` `fold` `unfold`
@@ -43,16 +43,17 @@ restarts at Q1 per batch.
 
 | Env | Default | Meaning |
 |---|---|---|
-| `PI_QUOTE_KEY_QUOTE` · `_FOLD` · `_MANAGE` | `alt+q` · `alt+f` · `alt+e` | Key(s) per action; comma-separated lists bind several keys |
+| `PI_QUOTE_KEY_QUOTE` · `_FOLD` · `_MANAGE` | `alt+q` · `alt+h` · `alt+e` | Key(s) per action; comma-separated lists bind several keys |
 | `PI_QUOTE_FOLD_LINES` | `8` | Auto-fold beyond this many card lines |
 | `PI_QUOTE_CLIPBOARD` | on | `=0` disables the clipboard fallback |
 | `PI_QUOTE_ALLOW_UNREVIEWED` | off | `=1` skips the reviewed-version allowlist |
 | `PI_QUOTE_DEBUG` / `PI_QUOTE_DEBUG_LOG` | off / `/tmp/quote-blocks-debug.log` | Debug log |
 
 Keys use pi's key-id format; set them per terminal (WezTerm pane env,
-direnv, …) when a default collides with your terminal or shell.
-`alt+shift+<letter>` cannot match any encoding in pi-tui 1.4.0 and warns
-at startup.
+direnv, …) when a default collides. The fold default is `alt+h` because
+pi binds `alt+f` to the editor's word-jump; on Windows `alt+q` overlaps
+pi's dequeue (remap it there). `alt+shift+<letter>` matches no encoding
+in pi-tui 1.4.0 and warns at startup.
 
 ## How it works
 

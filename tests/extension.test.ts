@@ -146,9 +146,9 @@ describe("shortcut configuration (PI_QUOTE_KEY_*)", () => {
 		for (const name of ENV_VARS) delete process.env[name];
 	});
 
-	it("defaults to alt+q / alt+f / alt+e", () => {
+	it("defaults to alt+q / alt+h / alt+e", () => {
 		expect(keysFor("quote")).toEqual(["alt+q"]);
-		expect(keysFor("fold")).toEqual(["alt+f"]);
+		expect(keysFor("fold")).toEqual(["alt+h"]);
 		expect(keysFor("manage")).toEqual(["alt+e"]);
 	});
 
@@ -160,7 +160,7 @@ describe("shortcut configuration (PI_QUOTE_KEY_*)", () => {
 		expect(keysFor("fold")).toEqual(["alt+r", "ctrl+alt+j"]); // trimmed, lowercased, deduped
 
 		process.env.PI_QUOTE_KEY_FOLD = "  ";
-		expect(keysFor("fold")).toEqual(["alt+f"]); // empty → default
+		expect(keysFor("fold")).toEqual(["alt+h"]); // empty → default
 	});
 
 	it("configured keys are what get registered", () => {
@@ -187,13 +187,25 @@ describe("extension factory", () => {
 		vi.restoreAllMocks();
 	});
 
-	it("fold binding: alt+f parses everywhere; alt+shift+q is dead or harmful (not registered)", () => {
+	it("fold binding: alt+h parses everywhere and is free of pi built-ins; alt+shift+q stays dead", () => {
+		// Snapshot of pi 1.4.0 default alt+* keys (KEYBINDINGS: TUI editor
+		// readline-style keys + app actions + Windows variants). Re-verify when
+		// REVIEWED_PI_VERSIONS gains a version.
+		const builtinAltKeys = [
+			"alt+b", "alt+backspace", "alt+d", "alt+delete", "alt+down", "alt+enter",
+			"alt+f", "alt+left", "alt+right", "alt+up", "alt+y",
+			"alt+q", "alt+p", "alt+v", "alt+z", // Windows/WSL variants
+		];
+		expect(builtinAltKeys).toContain("alt+f"); // the collision that moved the default
+		expect(builtinAltKeys).not.toContain("alt+h");
+		expect(builtinAltKeys).not.toContain("alt+e");
+		expect(matchesKey("\x1bh", "alt+h")).toBe(true);
 		// Verified against pi-tui 1.4.0's matcher:
 		// - legacy: ESC + uppercase Q has no key id
 		// - kitty "\x1b[113:81;3u"/"\x1b[113;3u" normalize the shifted letter
 		//   back to lowercase and match alt+q (quote selection!), not alt+shift+q
 		// - kitty "\x1b[81;3u" matches nothing
-		expect(matchesKey("\x1bf", "alt+f")).toBe(true);
+		expect(matchesKey("\x1bQ", "alt+shift+q")).toBe(false);
 		expect(matchesKey("\x1bQ", "alt+shift+q")).toBe(false);
 		expect(matchesKey("\x1b[113:81;3u", "alt+shift+q")).toBe(false);
 		expect(matchesKey("\x1b[113;3u", "alt+shift+q")).toBe(false);
@@ -204,7 +216,7 @@ describe("extension factory", () => {
 	it("registers shortcuts, commands, and lifecycle events", () => {
 		const h = harness();
 		expect(Object.keys(h.shortcuts)).toEqual(
-			expect.arrayContaining(["alt+q", "alt+e", "alt+f"]),
+			expect.arrayContaining(["alt+q", "alt+e", "alt+h"]),
 		);
 		expect(Object.keys(h.shortcuts)).not.toContain("alt+shift+q");
 		expect(Object.keys(h.commands)).toEqual(

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.1 (2026-10-31)
+
+### Fixed
+
+- Fold default key moved `alt+f` → `alt+h`: pi binds `alt+f` to
+  `tui.editor.cursorWordRight`, so the extension stole the editor's
+  word-jump and pi printed a shortcut-conflict diagnostic on every
+  start. `alt+h` is free across pi 1.4.0's standard and Windows default
+  keymaps (snapshot test); `PI_QUOTE_KEY_FOLD=alt+f` restores the old
+  binding if you prefer it.
+
 ## 0.2.0 (2026-10-31)
 
 ### Added
