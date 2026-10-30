@@ -1,0 +1,250 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import factory from "../quote-blocks";
+
+/** Minimal mock of the extension runtime: captures registrations. */
+function harness() {
+	const shortcuts: Record<string, unknown> = {};
+	const commands: Record<string, { description: string; handler: (args: string, ctx: unknown) => Promise<void> }> = {};
+	const events: Record<string, (event: unknown, ctx?: unknown) => Promise<unknown>> = {};
+
+	let draft = "";
+	const notes: Array<[string, string]> = [];
+	let widgetFactory: ((tui: unknown, theme: unknown) => { render(width: number): string[] }) | undefined;
+	let editorNext: string | undefined; // undefined = cancelled; "unsupported" = no ctx.ui.editor
+	const editorCalls: Array<[string, string | undefined]> = [];
+
+	const ctx = {
+		mode: "tui",
+		hasUI: true,
+		cwd: "/tmp",
+		ui: {
+			theme: { fg: (_c: string, t: string) => t },
+			setWidget: (_key: string, content: unknown) => {
+				if (typeof content === "function") widgetFactory = content as typeof widgetFactory;
+			},
+			getEditorText: () => draft,
+			setEditorText: (t: string) => {
+				draft = t;
+			},
+			pasteToEditor: (t: string) => {
+				draft += t;
+			},
+			notify: (message: string, type?: string) => notes.push([type ?? "info", message]),
+			get editor() {
+				return editorNext === "unsupported"
+					? undefined
+					: (title: string, prefill?: string) => {
+							editorCalls.push([title, prefill]);
+							return editorNext;
+						};
+			},
+		},
+		sessionManager: {
+			getBranch: () =>
+				branch as Array<Record<string, unknown>>,
+		},
+	};
+	let branch: Array<Record<string, unknown>> = [];
+
+	const pi = {
+		registerShortcut: (key: string, def: unknown) => {
+			shortcuts[key] = def;
+		},
+		registerCommand: (name: string, def: { description: string; handler: (args: string, ctx: unknown) => Promise<void> }) => {
+			commands[name] = def;
+		},
+		on: (event: string, handler: (event: unknown, ctx?: unknown) => Promise<unknown>) => {
+			events[event] = handler;
+		},
+	};
+	factory(pi as unknown as ExtensionAPI);
+
+	return {
+		shortcuts,
+		commands,
+		events,
+		ctx,
+		notes,
+		editorCalls,
+		get draft() {
+			return draft;
+		},
+		set draft(value: string) {
+			draft = value;
+		},
+		set branch(value: Array<Record<string, unknown>>) {
+			branch = value;
+		},
+		set editorNext(value: string | undefined) {
+			editorNext = value;
+		},
+		render(width = 80): string[] {
+			if (!widgetFactory) throw new Error("widget not installed");
+			return widgetFactory!({ requestRender: () => {} }, ctx.ui.theme).render(width);
+		},
+		lastNote: () => notes[notes.length - 1]?.[1] ?? "",
+	};
+}
+
+describe("extension factory", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("registers shortcuts, commands, and lifecycle events", () => {
+		const h = harness();
+		expect(Object.keys(h.shortcuts)).toEqual(expect.arrayContaining(["alt+q", "alt+shift+q"]));
+		expect(Object.keys(h.commands)).toEqual(
+			expect.arrayContaining(["quote", "quote-selection", "quotes"]),
+		);
+		expect(Object.keys(h.events)).toEqual(
+			expect.arrayContaining(["input", "session_start", "session_shutdown"]),
+		);
+	});
+
+	it("/quote quotes the last assistant reply and inserts a marker", async () => {
+		const h = harness();
+		await h.events.session_start({ type: "session_start" }, h.ctx);
+		h.branch = [
+			{ type: "message", message: { role: "user", content: [{ type: "text", text: "hi" }] } },
+			{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "first" }] } },
+			{
+				type: "message",
+				message: {
+					role: "assistant",
+					content: [
+						{ type: "thinking", thinking: "internal" },
+						{ type: "text", text: "second L1\nL2" },
+					],
+				},
+			},
+		];
+		await h.commands.quote.handler("", h.ctx);
+		expect(h.draft).toBe("[Q1]");
+		expect(h.lastNote()).toContain("Q1");
+		expect(h.lastNote()).toContain("reply -1");
+
+		await h.commands.quote.handler("2", h.ctx);
+		expect(h.draft).toBe("[Q1][Q2]");
+	});
+
+	it("/quote rejects out-of-range indices with a helpful message", async () => {
+		const h = harness();
+		await h.events.session_start({ type: "session_start" }, h.ctx);
+		h.branch = [{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "only" }] } }];
+		await h.commands.quote.handler("5", h.ctx);
+		expect(h.lastNote()).toContain("Only 1 assistant message");
+		expect(h.draft).toBe("");
+	});
+
+	it("/quotes remove deletes the block and strips its marker only", async () => {
+		const h = harness();
+		await h.events.session_start({ type: "session_start" }, h.ctx);
+		h.branch = [
+			{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "one" }] } },
+			{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "two" }] } },
+		];
+		await h.commands.quote.handler("2", h.ctx); // Q1 = "one"
+		await h.commands.quote.handler("", h.ctx); // Q2 = "two"
+		h.draft = "keep  double  spacing [Q1] and [Q2] done";
+		await h.commands.quotes.handler("remove q2", h.ctx);
+		expect(h.draft).toBe("keep  double  spacing [Q1] and done");
+		expect(h.lastNote()).toBe("Block Q2 removed");
+	});
+
+	it("/quotes edit updates block text; emptied text removes the block", async () => {
+		const h = harness();
+		await h.events.session_start({ type: "session_start" }, h.ctx);
+		h.branch = [{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "original" }] } }];
+		await h.commands.quote.handler("", h.ctx);
+		h.draft = "[Q1] question";
+
+		h.editorNext = "trimmed";
+		await h.commands.quotes.handler("edit 1", h.ctx);
+		expect(h.editorCalls[0]?.[0]).toContain("Q1");
+		expect(h.lastNote()).toContain("updated");
+		expect(h.render().some((line) => line.includes("trimmed"))).toBe(true);
+
+		h.editorNext = ""; // emptied → remove
+		await h.commands.quotes.handler("edit q1", h.ctx);
+		expect(h.lastNote()).toContain("removed");
+	});
+
+	it("/quotes preview shows the expanded submit text without consuming blocks", async () => {
+		const h = harness();
+		await h.events.session_start({ type: "session_start" }, h.ctx);
+		h.branch = [{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "quoted" }] } }];
+		await h.commands.quote.handler("", h.ctx);
+		h.draft = "about [Q1]";
+
+		h.editorNext = undefined; // dialog cancelled → returns undefined
+		await h.commands.quotes.handler("preview", h.ctx);
+		expect(h.editorCalls[0]?.[1]).toContain("> quoted");
+		// block still alive: preview must not consume it
+		const result = (await h.events.input({ source: "prompt", text: h.draft })) as {
+			action: string;
+			text: string;
+		};
+		expect(result.action).toBe("transform");
+		expect(result.text).toContain("> quoted");
+	});
+
+	it("input transform expands markers and drops unreferenced blocks", async () => {
+		const h = harness();
+		await h.events.session_start({ type: "session_start" }, h.ctx);
+		h.branch = [
+			{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "alpha" }] } },
+			{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "beta" }] } },
+		];
+		await h.commands.quote.handler("2", h.ctx); // Q1 = alpha
+		await h.commands.quote.handler("", h.ctx); // Q2 = beta
+		h.draft = "only [Q1] here";
+
+		const result = (await h.events.input({ source: "prompt", text: h.draft })) as {
+			action: string;
+			text: string;
+		};
+		expect(result.action).toBe("transform");
+		expect(result.text).toBe("only \n\n> alpha\n\n here");
+		expect(h.render()).toEqual([]); // Q2 dropped, widget empty
+	});
+
+	it("input without blocks continues unchanged", async () => {
+		const h = harness();
+		await h.events.session_start({ type: "session_start" }, h.ctx);
+		const result = (await h.events.input({ source: "prompt", text: "plain" })) as { action: string };
+		expect(result.action).toBe("continue");
+	});
+
+	it("widget renders cards in draft anchor order", async () => {
+		const h = harness();
+		await h.events.session_start({ type: "session_start" }, h.ctx);
+		h.branch = [
+			{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "aaa" }] } },
+			{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "bbb" }] } },
+		];
+		await h.commands.quote.handler("2", h.ctx); // Q1 = aaa
+		await h.commands.quote.handler("", h.ctx); // Q2 = bbb
+		h.draft = "later [Q2] first, then [Q1]";
+
+		const headers = h.render().filter((line) => line.startsWith("❝"));
+		expect(headers[0]).toContain("Q2");
+		expect(headers[1]).toContain("Q1");
+	});
+
+	it("deleting a marker from the draft prunes its card", async () => {
+		const h = harness();
+		await h.events.session_start({ type: "session_start" }, h.ctx);
+		h.branch = [
+			{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "aaa" }] } },
+			{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "bbb" }] } },
+		];
+		await h.commands.quote.handler("2", h.ctx);
+		await h.commands.quote.handler("", h.ctx);
+		h.draft = "only [Q1]";
+		const lines = h.render();
+		expect(lines.filter((line) => line.startsWith("❝"))).toHaveLength(1);
+		expect(lines[0]).toContain("Q1");
+	});
+});

@@ -210,7 +210,7 @@ type ThemeLike = {
 	fg(color: string, text: string): string;
 };
 
-function versionAtLeast(a: string, b: string): boolean {
+export function versionAtLeast(a: string, b: string): boolean {
 	const parse = (v: string) =>
 		v
 			.split("-")[0]

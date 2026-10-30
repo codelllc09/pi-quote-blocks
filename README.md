@@ -61,6 +61,14 @@ pi install npm:pi-quote-blocks
 
 Or from source: `pi install git:github.com/codelllc09/pi-quote-blocks`
 
+## Development
+
+```bash
+npm install
+npm run typecheck   # tsc --noEmit (strict)
+npm test            # vitest: pure functions + mocked-runtime extension tests
+```
+
 ## Compatibility
 
 Live selection reads through renderer internals, so the upstream discipline

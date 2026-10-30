@@ -57,6 +57,14 @@ pi install npm:pi-quote-blocks
 
 或从源码安装：`pi install git:github.com/codelllc09/pi-quote-blocks`
 
+## 开发
+
+```bash
+npm install
+npm run typecheck   # tsc --noEmit（严格模式）
+npm test            # vitest：纯函数 + mock 运行时测试
+```
+
 ## 兼容性
 
 实时选区读取用了 pi 渲染器的内部 API，因此沿用上游的**逐版验证纪律**：
