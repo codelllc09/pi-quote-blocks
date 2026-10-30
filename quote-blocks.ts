@@ -21,7 +21,8 @@
  * Shortcuts: Alt+Q quote selection; Alt+Shift+Q fold/expand
  * Fallback:  Alt+Q with no readable selection quotes the system clipboard
  *            (Pi copy-on-select keeps it in sync); PI_QUOTE_CLIPBOARD=0 off
- * Commands:  /quote-selection (same as Alt+Q) · /quotes [clear|fold|unfold]
+ * Commands:  /quote-selection (Alt+Q) · /quote [n] (nth-last assistant reply)
+ *            /quotes [clear|fold|unfold|edit Qn|remove Qn|preview]
  * Folding:   auto-collapse to one line beyond PI_QUOTE_FOLD_LINES (default 8)
  *
  * Design notes from debugging history (2026-10):
@@ -298,6 +299,7 @@ export default function (pi: ExtensionAPI): void {
 	let requestRender: (() => void) | undefined;
 	let cachedLines: string[] | undefined;
 	let cachedWidth: number | undefined;
+	let cachedOrderKey: string | undefined;
 	/** Fold state: undefined = auto (fold beyond threshold); "expanded"/"folded" = manual. */
 	let foldOverride: "expanded" | "folded" | undefined;
 
@@ -311,20 +313,24 @@ export default function (pi: ExtensionAPI): void {
 
 	function invalidateWidget(): void {
 		cachedLines = undefined;
+		cachedOrderKey = undefined;
 		requestRender?.();
+	}
+
+	/** Best-effort current editor text ("" when unavailable). */
+	function currentDraft(): string {
+		if (!currentCtx) return "";
+		try {
+			return currentCtx.ui.getEditorText();
+		} catch {
+			return "";
+		}
 	}
 
 	/** Drop blocks whose markers are no longer in the draft.
 	 * Never prune when the draft is empty: on submit the editor is cleared
 	 * before the input event fires, so an empty draft means "submitting". */
-	function pruneQuotes(): boolean {
-		if (!currentCtx) return false;
-		let draft = "";
-		try {
-			draft = currentCtx.ui.getEditorText();
-		} catch {
-			return false;
-		}
+	function pruneQuotes(draft: string): boolean {
 		if (draft.trim().length === 0) return false;
 		const before = store.quotes.size;
 		const removed: number[] = [];
@@ -340,7 +346,8 @@ export default function (pi: ExtensionAPI): void {
 
 	/** Widget render: zero lines when empty; one folded line beyond the threshold. */
 	function renderWidget(width: number): string[] {
-		if (pruneQuotes()) cachedLines = undefined;
+		const draft = currentDraft();
+		if (pruneQuotes(draft)) cachedLines = undefined;
 		if (store.quotes.size === 0) {
 			foldOverride = undefined;
 			return [];
@@ -362,10 +369,18 @@ export default function (pi: ExtensionAPI): void {
 			return cachedLines;
 		}
 
-		if (cachedLines && cachedWidth === width && cachedLines.length > 1) return cachedLines;
+		// Cards follow marker order in the draft (anchor order), not insertion
+		// order; the order signature keeps the render cache honest.
+		const orderKey = [...store.quotes.keys()].map((id) => draft.indexOf(markerOf(id))).join(",");
+		if (cachedLines && cachedWidth === width && cachedOrderKey === orderKey && cachedLines.length > 1) {
+			return cachedLines;
+		}
 
+		const ordered = [...store.quotes.entries()].sort(
+			(a, b) => draft.indexOf(markerOf(a[0])) - draft.indexOf(markerOf(b[0])),
+		);
 		const lines: string[] = [];
-		for (const [id, raw] of store.quotes) {
+		for (const [id, raw] of ordered) {
 			const quoteLines = raw.replace(/\r\n?/g, "\n").replace(/^\n+|\n+$/g, "").split("\n");
 			const header = `❝ Q${id} · ${quoteLines.length} line${quoteLines.length > 1 ? "s" : ""}`;
 			lines.push(truncateToWidth(fg("accent", header), width, "…"));
@@ -380,6 +395,7 @@ export default function (pi: ExtensionAPI): void {
 		if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
 
 		cachedWidth = width;
+		cachedOrderKey = orderKey;
 		cachedLines = lines;
 		return lines;
 	}
@@ -499,11 +515,115 @@ export default function (pi: ExtensionAPI): void {
 		handler: async (ctx) => toggleFold(ctx),
 	});
 
+	// ---- /quote [n]: assistant reply from history → quote block ----
+	/** Concatenated text blocks of an assistant message ("" when not one). */
+	function assistantText(message: unknown): string {
+		const m = message as { role?: string; content?: unknown } | null | undefined;
+		if (!m || m.role !== "assistant" || !Array.isArray(m.content)) return "";
+		const parts: string[] = [];
+		for (const block of m.content as { type?: string; text?: unknown }[]) {
+			if (block?.type === "text" && typeof block.text === "string" && block.text.trim()) {
+				parts.push(block.text);
+			}
+		}
+		return parts.join("\n\n").trim();
+	}
+
+	async function quoteHistory(ctx: ExtensionContext, arg: string): Promise<void> {
+		if (!ctx.hasUI) return;
+		try {
+			ctx.ui.getEditorText(); // the marker needs an editable prompt
+		} catch {
+			ctx.ui.notify("/quote needs an editable prompt (TUI mode)", "warning");
+			return;
+		}
+		const texts: string[] = [];
+		try {
+			for (const entry of ctx.sessionManager.getBranch()) {
+				if (entry?.type !== "message") continue;
+				const text = assistantText((entry as { message?: unknown }).message);
+				if (text) texts.push(text);
+			}
+		} catch {
+			/* unreadable history → treat as empty */
+		}
+		if (texts.length === 0) {
+			ctx.ui.notify("No assistant messages in this session yet", "info");
+			return;
+		}
+		let index = texts.length - 1; // default: last
+		if (arg && arg.toLowerCase() !== "last") {
+			const n = Number.parseInt(arg, 10);
+			if (!Number.isInteger(n) || n < 1) {
+				ctx.ui.notify("Usage: /quote [n] — n = nth-last assistant reply (default last)", "warning");
+				return;
+			}
+			index = texts.length - n;
+			if (index < 0) {
+				ctx.ui.notify(
+					`Only ${texts.length} assistant message${texts.length > 1 ? "s" : ""} in this session`,
+					"warning",
+				);
+				return;
+			}
+		}
+		const raw = texts[index].replace(/\r\n?/g, "\n").trim();
+		if (!raw) {
+			ctx.ui.notify("That reply has no text content", "info");
+			return;
+		}
+		createBlock(ctx, raw, `reply -${texts.length - index}`);
+	}
+
+	pi.registerCommand("quote", {
+		description: "Quote a past assistant reply as a block (/quote · /quote 2 = second-last)",
+		handler: async (args, ctx) => quoteHistory(ctx, args.trim()),
+	});
+
 	// ---- /quotes management ----
+	/** Parse "q3" / "3" → 3; undefined when not a block id. */
+	const parseBlockId = (token: string | undefined): number | undefined => {
+		const match = /^(?:q(\d+)|(\d+))$/.exec(token ?? "");
+		if (!match) return undefined;
+		return Number.parseInt(match[1] ?? match[2], 10);
+	};
+
+	/** Delete one block and its marker from the draft. */
+	function removeBlock(ctx: ExtensionContext, id: number): boolean {
+		if (!store.quotes.has(id)) return false;
+		try {
+			ctx.ui.setEditorText(stripMarkers(ctx.ui.getEditorText(), [markerOf(id)]));
+		} catch {
+			/* no editor — still drop the card */
+		}
+		store.quotes.delete(id);
+		if (store.quotes.size === 0) {
+			store.nextId = 1;
+			foldOverride = undefined;
+		}
+		invalidateWidget();
+		dbg(`remove: Q${id} deleted`);
+		return true;
+	}
+
+	/** What submit would send for the current draft, without consuming blocks. */
+	function expandedDraft(draft: string): string {
+		let text = draft;
+		for (const [id, raw] of store.quotes) {
+			const marker = markerOf(id);
+			if (!text.includes(marker)) continue;
+			const quote = formatQuote(raw);
+			text = quote ? expandMarker(text, marker, quote) : stripMarkers(text, [marker]);
+		}
+		return text;
+	}
+
 	pi.registerCommand("quotes", {
-		description: "Manage quote blocks (/quotes · /quotes clear · /quotes fold · /quotes unfold)",
+		description:
+			"Manage quote blocks (/quotes · clear · fold · unfold · edit Qn · remove Qn · preview)",
 		handler: async (args, ctx) => {
-			const sub = args.trim().toLowerCase();
+			const parts = args.trim().toLowerCase().split(/\s+/).filter(Boolean);
+			const sub = parts[0] ?? "";
 			if (sub === "fold" || sub === "unfold") {
 				if (!store.quotes.size) {
 					ctx.ui.notify("No quote blocks", "info");
@@ -519,12 +639,16 @@ export default function (pi: ExtensionAPI): void {
 					ctx.ui.notify("No quote blocks", "info");
 					return;
 				}
-				let draft = ctx.ui.getEditorText();
-				draft = stripMarkers(
-					draft,
-					[...store.quotes.keys()].map((id) => markerOf(id)),
-				);
-				ctx.ui.setEditorText(draft);
+				try {
+					ctx.ui.setEditorText(
+						stripMarkers(
+							ctx.ui.getEditorText(),
+							[...store.quotes.keys()].map((id) => markerOf(id)),
+						),
+					);
+				} catch {
+					/* no editor — just drop the cards */
+				}
 				store.quotes.clear();
 				store.nextId = 1;
 				foldOverride = undefined;
@@ -533,11 +657,69 @@ export default function (pi: ExtensionAPI): void {
 				ctx.ui.notify("All quote blocks removed", "info");
 				return;
 			}
+			if (sub === "remove" || sub === "rm" || sub === "delete") {
+				const id = parseBlockId(parts[1]);
+				if (id === undefined) {
+					ctx.ui.notify("Usage: /quotes remove Qn", "warning");
+					return;
+				}
+				if (!store.quotes.size) {
+					ctx.ui.notify("No quote blocks", "info");
+					return;
+				}
+				if (!removeBlock(ctx, id)) {
+					ctx.ui.notify(`No block Q${id}`, "warning");
+					return;
+				}
+				ctx.ui.notify(`Block Q${id} removed`, "info");
+				return;
+			}
+			if (sub === "edit") {
+				const id = parseBlockId(parts[1]);
+				if (id === undefined) {
+					ctx.ui.notify("Usage: /quotes edit Qn", "warning");
+					return;
+				}
+				const raw = store.quotes.get(id);
+				if (raw === undefined) {
+					ctx.ui.notify(`No block Q${id}`, "warning");
+					return;
+				}
+				if (typeof ctx.ui.editor !== "function") {
+					ctx.ui.notify("Editing needs a pi version with ctx.ui.editor", "warning");
+					return;
+				}
+				const edited = await ctx.ui.editor(`Edit quote block Q${id}`, raw);
+				if (edited === undefined) return; // cancelled
+				const clean = edited.replace(/\r\n?/g, "\n").trim();
+				if (!clean) {
+					removeBlock(ctx, id);
+					ctx.ui.notify(`Block Q${id} emptied → removed`, "info");
+					return;
+				}
+				store.quotes.set(id, clean);
+				invalidateWidget();
+				ctx.ui.notify(`Block Q${id} updated (${clean.split("\n").length} lines)`, "info");
+				return;
+			}
+			if (sub === "preview") {
+				if (!store.quotes.size) {
+					ctx.ui.notify("No quote blocks", "info");
+					return;
+				}
+				const text = expandedDraft(currentDraft());
+				if (typeof ctx.ui.editor === "function") {
+					await ctx.ui.editor("Quote preview — Esc to close (edits are not applied)", text);
+				} else {
+					ctx.ui.notify(text, "info");
+				}
+				return;
+			}
 			if (!store.quotes.size) {
 				ctx.ui.notify("No quote blocks (select text + Alt+Q)", "info");
 				return;
 			}
-			pruneQuotes();
+			pruneQuotes(currentDraft());
 			const list = [...store.quotes.entries()]
 				.map(([id, raw]) => {
 					const first = raw.split("\n")[0].trim().slice(0, 40);
