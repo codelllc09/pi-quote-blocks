@@ -50,10 +50,8 @@ restarts at Q1 per batch.
 | `PI_QUOTE_DEBUG` / `PI_QUOTE_DEBUG_LOG` | off / `/tmp/quote-blocks-debug.log` | Debug log |
 
 Keys use pi's key-id format; set them per terminal (WezTerm pane env,
-direnv, …) when a default collides. The fold default is `alt+h` because
-pi binds `alt+f` to the editor's word-jump; on Windows `alt+q` overlaps
-pi's dequeue (remap it there). `alt+shift+<letter>` matches no encoding
-in pi-tui 1.4.0 and warns at startup.
+direnv, …) when a default collides. `alt+shift+<letter>` matches no
+encoding in pi-tui 1.4.0 and warns at startup.
 
 ## How it works
 

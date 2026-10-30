@@ -48,9 +48,7 @@ pi install npm:pi-quote-blocks
 | `PI_QUOTE_DEBUG` / `PI_QUOTE_DEBUG_LOG` | 关 / `/tmp/quote-blocks-debug.log` | 调试日志 |
 
 键位格式同 pi 的 key-id；默认键冲突时可按终端设置（WezTerm pane env、direnv 等）。
-折叠默认用 `alt+h`，因为 pi 把 `alt+f` 给了编辑器按词右移；Windows 上
-`alt+q` 与 pi 的消息出队键重叠（可换键）。`alt+shift+<字母>` 在
-pi-tui 1.4.0 中无法匹配任何编码，配置后启动时会警告。
+`alt+shift+<字母>` 在 pi-tui 1.4.0 中无法匹配任何编码，配置后启动时会警告。
 
 ## 工作方式
 
