@@ -9,11 +9,13 @@
   also reachable from a shortcut: pick a block, then edit its text,
   remove it, re-insert its marker at the cursor, or clear all. The
   dialogs overlay the editor; the draft is never touched.
-- The block picker is a custom component with a live preview pane
-  (full content of the highlighted block, up to 10 lines, `+N more`
-  indicator) — `ctx.ui.select` alone shows one truncated line per
-  option. Falls back to `ctx.ui.select` where `ctx.ui.custom` is
-  unavailable.
+- The block picker is a floating overlay window (drawn above the
+  transcript — no full-screen takeover) with a live preview pane:
+  fixed window height (list and preview panes pad/scroll, so moving
+  the cursor never shifts the layout), dim wrapped preview of the
+  highlighted block, `+N more` indicator, title and key hints in the
+  window borders. Falls back to `ctx.ui.select` where `ctx.ui.custom`
+  is unavailable.
 - `/quote [n]` — quote the nth-last assistant reply from session history as
   a block (public `sessionManager.getBranch()` API; default: the last reply).
   Keyboard-only quoting, no mouse selection needed.

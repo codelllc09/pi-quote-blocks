@@ -332,6 +332,29 @@ describe("extension factory", () => {
 		expect(h.selectCalls[0]?.[1]).toContain("── clear all blocks ──");
 	});
 
+	it("picker window keeps a fixed height regardless of quote length", async () => {
+		const h = harness();
+		await h.events.session_start({ type: "session_start" }, h.ctx);
+		h.branch = [{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "short" }] } }];
+		await h.commands.quote.handler("", h.ctx);
+
+		h.customKeys.push("tui.select.cancel");
+		await h.shortcuts["alt+e"].handler(h.ctx);
+		const shortRows = h.customRenderLines.length;
+
+		// same block, now 8 lines long — window must not grow
+		h.editorNext = "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight";
+		await h.commands.quotes.handler("edit q1", h.ctx);
+		h.customKeys.push("tui.select.cancel");
+		await h.shortcuts["alt+e"].handler(h.ctx);
+
+		expect(h.customRenderLines.length).toBe(shortRows);
+		const preview = h.customRenderLines.join("\n");
+		expect(preview).toContain("five"); // first 6 source lines fit
+		expect(preview).toContain("+2 more lines"); // 8 - 6 shown
+		expect(preview).not.toContain("seven"); // beyond the budget
+	});
+
 	it("Alt+E edits a block mid-composition without touching the draft", async () => {
 		const h = harness();
 		await h.events.session_start({ type: "session_start" }, h.ctx);

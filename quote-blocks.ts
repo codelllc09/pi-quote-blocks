@@ -50,7 +50,7 @@ import {
 	type ExtensionContext,
 	type ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 
 export const MIN_PI_VERSION = "1.0.3";
 /** Pi versions verified against the renderer/editor APIs used below.
@@ -747,10 +747,17 @@ export default function (pi: ExtensionAPI): void {
 	// dialogs overlay the editor and never touch the draft text.
 	type PickTarget = { kind: "block"; id: number } | { kind: "clearAll" };
 
-	/** Block picker with a live preview of the highlighted block's full
-	 * content (ctx.ui.select shows one truncated line per option and has no
-	 * hover preview; this component adds both). Falls back to ctx.ui.select
-	 * on pi versions without ctx.ui.custom(). */
+	/** Floating block picker with a live preview of the highlighted block.
+	 *
+	 * Ergonomics (the first full-area version was genuinely dizzying):
+	 * - overlay: true — drawn above the transcript/editor, no screen takeover
+	 * - fixed window height: list pane and preview pane each pad/scroll to a
+	 *   constant row count, so moving the cursor only recolors one list row
+	 *   and swaps preview text in place; the layout never jumps
+	 * - the preview is dim and wraps (wrapTextWithAnsi), never truncates
+	 * - title sits in the top border, key hints in the bottom border
+	 *
+	 * Falls back to ctx.ui.select on pi versions without ctx.ui.custom(). */
 	async function pickBlock(
 		ctx: ExtensionContext,
 		title: string,
@@ -763,7 +770,7 @@ export default function (pi: ExtensionAPI): void {
 		const labelOf = (target: PickTarget): string => {
 			if (target.kind === "clearAll") return "── clear all blocks ──";
 			const lines = (store.quotes.get(target.id) ?? "").split("\n");
-			return `Q${target.id} · ${lines.length} lines · ${lines[0].trim().slice(0, 50)}`;
+			return `Q${target.id} · ${lines.length} lines · ${lines[0].trim().slice(0, 40)}`;
 		};
 		const customFn: ExtensionUIContext["custom"] | undefined = (ctx.ui as Partial<ExtensionUIContext>).custom;
 		if (!customFn) {
@@ -773,69 +780,113 @@ export default function (pi: ExtensionAPI): void {
 			const index = labels.indexOf(chosen);
 			return index >= 0 ? targets[index] : undefined;
 		}
-		const PREVIEW_LINES = 10;
-		return customFn<PickTarget | undefined>((tui, theme, keybindings, done) => {
-			let index = 0;
-			let cachedWidth: number | undefined;
-			let cachedLines: string[] | undefined;
-			const invalidate = () => {
-				cachedWidth = undefined;
-				cachedLines = undefined;
-			};
-			return {
-				render(width: number): string[] {
-					if (cachedLines && cachedWidth === width) return cachedLines;
-					const lines: string[] = [theme.fg("accent", title)];
-					targets.forEach((target, i) => {
-						const selected = i === index;
-						const cursor = selected ? "❯ " : "  ";
-						const label = selected ? theme.fg("accent", labelOf(target)) : labelOf(target);
-						lines.push(truncateToWidth(`${cursor}${label}`, width, "…"));
-					});
-					const target = targets[index];
-					lines.push(theme.fg("dim", "─".repeat(Math.max(8, Math.min(width, 64)))));
-					if (target.kind === "clearAll") {
-						lines.push(theme.fg("dim", "Remove every quote block and its marker from the draft."));
-					} else {
-						const content = (store.quotes.get(target.id) ?? "").replace(/\r\n?/g, "\n").split("\n");
-						for (const line of content.slice(0, PREVIEW_LINES)) {
-							lines.push(
-								truncateToWidth(`${theme.fg("dim", "│ ")}${line.trim()}`, width, theme.fg("dim", "…")),
-							);
+		const LIST_ROWS = 6; // list pane height (windowed when more targets)
+		const PREVIEW_ROWS = 7; // preview pane height (padded when shorter)
+		return customFn<PickTarget | undefined>(
+			(tui, theme, keybindings, done) => {
+				let index = 0;
+				let cachedWidth: number | undefined;
+				let cachedLines: string[] | undefined;
+				const invalidate = () => {
+					cachedWidth = undefined;
+					cachedLines = undefined;
+				};
+				return {
+					render(width: number): string[] {
+						if (cachedLines && cachedWidth === width) return cachedLines;
+						const inner = Math.max(10, width - 4); // "│ " + content + " │"
+						const pad = (line: string): string => {
+							const clipped = truncateToWidth(line, inner, "…");
+							return `│ ${clipped}${" ".repeat(Math.max(0, inner - visibleWidth(clipped)))} │`;
+						};
+						const borderRow = (left: string, right: string, label: string, style?: (t: string) => string): string => {
+							const text = style ? style(label) : label;
+							const fill = Math.max(1, width - 4 - visibleWidth(text));
+							return `${left}─${text}${"─".repeat(fill)}${right}`;
+						};
+
+						// ─ list pane (windowed around the cursor) ─
+						const windowRows = Math.min(LIST_ROWS, targets.length);
+						const listStart =
+							targets.length <= LIST_ROWS
+								? 0
+								: Math.max(0, Math.min(index - (LIST_ROWS >> 1), targets.length - LIST_ROWS));
+						const listRows: string[] = [];
+						for (let i = listStart; i < listStart + windowRows; i++) {
+							const selected = i === index;
+							const cursor = selected ? "❯ " : "  ";
+							const label = selected ? theme.fg("accent", labelOf(targets[i])) : labelOf(targets[i]);
+							listRows.push(pad(`${cursor}${label}`));
 						}
-						if (content.length > PREVIEW_LINES) {
-							lines.push(theme.fg("dim", `│ … +${content.length - PREVIEW_LINES} more lines (edit shows all)`));
+						const titleText =
+							targets.length > LIST_ROWS
+								? ` ❝ ${title} · ${listStart + 1}–${listStart + windowRows} of ${targets.length} `
+								: ` ❝ ${title} `;
+
+						// ─ preview pane (fixed height; source lines wrap, all-or-nothing) ─
+						const previewPlain: string[] = [];
+						const target = targets[index];
+						if (target.kind === "clearAll") {
+							previewPlain.push("Remove every quote block and its marker from the draft.");
+						} else {
+							const content = (store.quotes.get(target.id) ?? "").replace(/\r\n?/g, "\n").split("\n");
+							const budget = PREVIEW_ROWS - 1; // last row reserved for the "+N more" hint
+							let used = 0;
+							let consumed = 0;
+							for (const source of content) {
+								const wrapped = wrapTextWithAnsi(source.trim() || " ", inner);
+								if (used + wrapped.length > budget) break;
+								previewPlain.push(...wrapped);
+								used += wrapped.length;
+								consumed += 1;
+							}
+							const remaining = content.length - consumed;
+							if (remaining > 0) {
+								previewPlain.push(`… +${remaining} more line${remaining > 1 ? "s" : ""} (edit shows all)`);
+							}
 						}
-					}
-					lines.push(theme.fg("dim", "↑↓ move · Enter select · Esc cancel"));
-					cachedWidth = width;
-					cachedLines = lines;
-					return lines;
-				},
-				handleInput(data: string): void {
-					if (keybindings.matches(data, "tui.select.up")) {
-						index = (index - 1 + targets.length) % targets.length;
-					} else if (keybindings.matches(data, "tui.select.down")) {
-						index = (index + 1) % targets.length;
-					} else if (keybindings.matches(data, "tui.select.pageUp")) {
-						index = Math.max(0, index - 5);
-					} else if (keybindings.matches(data, "tui.select.pageDown")) {
-						index = Math.min(targets.length - 1, index + 5);
-					} else if (keybindings.matches(data, "tui.select.confirm")) {
-						done(targets[index]);
-						return;
-					} else if (keybindings.matches(data, "tui.select.cancel")) {
-						done(undefined);
-						return;
-					} else {
-						return;
-					}
-					invalidate();
-					tui.requestRender();
-				},
-				invalidate,
-			};
-		});
+						while (previewPlain.length < PREVIEW_ROWS) previewPlain.push("");
+
+						const lines = [
+							borderRow("╭", "╮", titleText, (t) => theme.fg("accent", t)),
+							...listRows,
+							borderRow("├", "┤", " preview ", (t) => theme.fg("dim", t)),
+							...previewPlain.map((row) => pad(theme.fg("dim", row))),
+							borderRow("╰", "╯", " ↑↓ move · Enter select · Esc cancel ", (t) => theme.fg("dim", t)),
+						];
+						cachedWidth = width;
+						cachedLines = lines;
+						return lines;
+					},
+					handleInput(data: string): void {
+						if (keybindings.matches(data, "tui.select.up")) {
+							index = (index - 1 + targets.length) % targets.length;
+						} else if (keybindings.matches(data, "tui.select.down")) {
+							index = (index + 1) % targets.length;
+						} else if (keybindings.matches(data, "tui.select.pageUp")) {
+							index = Math.max(0, index - 5);
+						} else if (keybindings.matches(data, "tui.select.pageDown")) {
+							index = Math.min(targets.length - 1, index + 5);
+						} else if (keybindings.matches(data, "tui.select.confirm")) {
+							done(targets[index]);
+							return;
+						} else if (keybindings.matches(data, "tui.select.cancel")) {
+							done(undefined);
+							return;
+						} else {
+							return;
+						}
+						invalidate();
+						tui.requestRender();
+					},
+					invalidate,
+				};
+			},
+			{
+				overlay: true,
+				overlayOptions: { anchor: "center", width: "60%", minWidth: 46, maxHeight: 24 },
+			},
+		);
 	}
 
 	async function manageBlocks(ctx: ExtensionContext): Promise<void> {
