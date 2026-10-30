@@ -32,6 +32,7 @@ extension gets the same effect with three layers:
 | Action | Effect |
 |---|---|
 | Drag-select transcript text + `Alt+Q` | Create a quote block, insert `[Qn]` at cursor |
+| `Alt+Q` with no selection / unreviewed pi | Falls back to the system clipboard (pi's copy-on-select keeps it in sync) |
 | Repeat for more blocks | Blocks coexist; numbering restarts at Q1 per batch |
 | Delete a `[Qn]` marker from the draft | Its card disappears |
 | `Alt+Shift+Q` | Fold / expand all blocks |
@@ -43,6 +44,7 @@ extension gets the same effect with three layers:
 | Env | Default | Meaning |
 |---|---|---|
 | `PI_QUOTE_FOLD_LINES` | `8` | Auto-fold beyond this many card lines |
+| `PI_QUOTE_CLIPBOARD` | on | `=0` disables the clipboard fallback for Alt+Q |
 | `PI_QUOTE_DEBUG` | off | `=1` enables the debug log |
 | `PI_QUOTE_DEBUG_LOG` | `/tmp/quote-blocks-debug.log` | Log path |
 | `PI_QUOTE_ALLOW_UNREVIEWED` | off | `=1` skips the reviewed-version allowlist |
@@ -57,10 +59,12 @@ Or from source: `pi install git:github.com/codelllc09/pi-quote-blocks`
 
 ## Compatibility
 
-Reads the selection through renderer internals, so the upstream discipline
-applies: versions listed in `REVIEWED_PI_VERSIONS` run; anything else refuses
-with a hint until reviewed. Requires fullscreen mode (pi's default) and a
-terminal with mouse selection.
+Live selection reads through renderer internals, so the upstream discipline
+applies: versions listed in `REVIEWED_PI_VERSIONS` use it; anything else —
+and regular (non-fullscreen) mode — falls back to the system clipboard
+(`pbpaste` / `xclip` / `xsel` / `wl-paste` / `termux-clipboard-get` /
+`Get-Clipboard`; pi's copy-on-select is on by default). Disable with
+`PI_QUOTE_CLIPBOARD=0`.
 
 Reviewed: **1.0.3** (upstream), **1.4.0** (this repo, 2026-10).
 
@@ -73,5 +77,5 @@ See `LICENSE`.
 
 ## Roadmap
 
-- [ ] Clipboard fallback for unreviewed pi versions (read copy-on-select
+- [x] Clipboard fallback for unreviewed pi versions (read copy-on-select
       clipboard — public API only)

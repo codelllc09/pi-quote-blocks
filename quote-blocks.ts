@@ -19,6 +19,8 @@
  *   ❯ [Q1] is this right? [Q2] and this?   ← draft: short markers only
  *
  * Shortcuts: Alt+Q quote selection; Alt+Shift+Q fold/expand
+ * Fallback:  Alt+Q with no readable selection quotes the system clipboard
+ *            (Pi copy-on-select keeps it in sync); PI_QUOTE_CLIPBOARD=0 off
  * Commands:  /quote-selection (same as Alt+Q) · /quotes [clear|fold|unfold]
  * Folding:   auto-collapse to one line beyond PI_QUOTE_FOLD_LINES (default 8)
  *
@@ -38,8 +40,15 @@
  * discipline (per-version review) with an escape hatch env.
  */
 
+import { execFile as execFileCb } from "node:child_process";
 import * as fs from "node:fs";
-import { VERSION, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { promisify } from "node:util";
+import {
+	VERSION,
+	type ExtensionAPI,
+	type ExtensionContext,
+	type ExtensionUIContext,
+} from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 
 export const MIN_PI_VERSION = "1.0.3";
@@ -53,12 +62,16 @@ const foldThresholdEnv = Number.parseInt(process.env.PI_QUOTE_FOLD_LINES ?? "", 
 /** Auto-fold beyond this many card lines. Invalid or missing env falls back to 8
  * (a NaN threshold would make the comparison always false and silently kill folding). */
 const FOLD_THRESHOLD = Number.isFinite(foldThresholdEnv) ? foldThresholdEnv : 8;
+/** Clipboard fallback for Alt+Q when live selection is unavailable
+ * (unreviewed Pi version, regular mode, renderer API change). */
+const CLIPBOARD_FALLBACK = process.env.PI_QUOTE_CLIPBOARD !== "0";
 const DEBUG_LOG = process.env.PI_QUOTE_DEBUG_LOG ?? "/tmp/quote-blocks-debug.log";
 /** Debug log: only written when PI_QUOTE_DEBUG=1; zero I/O otherwise. */
 const DEBUG = process.env.PI_QUOTE_DEBUG === "1";
 
 /** Random per-module-instance fingerprint, for split-instance diagnosis. */
 const INSTANCE = Math.random().toString(36).slice(2, 8);
+const execFileAsync = promisify(execFileCb);
 const dbg = (message: string): void => {
 	if (!DEBUG) return;
 	try {
@@ -92,7 +105,6 @@ type SelectionRenderer = {
 	clearTextSelection(): void;
 	requestRender(): void;
 	hasOverlay(): boolean;
-	getFocusedComponent(): unknown;
 };
 
 /**
@@ -107,7 +119,7 @@ let cachedRenderer: SelectionRenderer | undefined;
 
 function getRenderer(ctx: ExtensionContext): SelectionRenderer {
 	if (cachedRenderer?.mode === "fullscreen") {
-		for (const method of ["getActiveSelectionText", "clearTextSelection", "requestRender", "hasOverlay", "getFocusedComponent"] as const) {
+		for (const method of ["getActiveSelectionText", "clearTextSelection", "requestRender", "hasOverlay"] as const) {
 			if (typeof cachedRenderer[method] !== "function") {
 				cachedRenderer = undefined; // stale: re-acquire below
 				break;
@@ -139,7 +151,6 @@ function getRenderer(ctx: ExtensionContext): SelectionRenderer {
 		"clearTextSelection",
 		"requestRender",
 		"hasOverlay",
-		"getFocusedComponent",
 	] as const) {
 		if (typeof candidate[method] !== "function") {
 			throw new Error(`Quote blocks unavailable: Pi renderer API changed (${method}).`);
@@ -150,15 +161,49 @@ function getRenderer(ctx: ExtensionContext): SelectionRenderer {
 	return cachedRenderer;
 }
 
-/** Pi's built-in prompt editor (pi-tui Editor). `moveToLineEnd` is private, guarded by runtime probing. */
-type CursorEditor = {
-	getLines(): string[];
-	getCursor(): { line: number; col: number };
-	moveToLineEnd(): void;
-	insertTextAtCursor(text: string): void;
-	getText(): string;
-	getExpandedText?(): string;
-};
+// ---- Clipboard fallback (public-API path; no renderer internals) ----
+
+type ClipboardCommand = { cmd: string; args: string[] };
+
+/** Candidate readers in preference order. Pi's fullscreen copy-on-select
+ * (default on) keeps the system clipboard in sync with the latest transcript
+ * selection, so this covers unreviewed Pi versions and regular mode. */
+function clipboardCandidates(): ClipboardCommand[] {
+	switch (process.platform) {
+		case "darwin":
+			return [{ cmd: "pbpaste", args: [] }];
+		case "win32":
+			return [{ cmd: "powershell.exe", args: ["-NoProfile", "-Command", "Get-Clipboard -Raw"] }];
+		default:
+			return [
+				...(process.env.TERMUX_VERSION ? [{ cmd: "termux-clipboard-get", args: [] }] : []),
+				...(process.env.WAYLAND_DISPLAY ? [{ cmd: "wl-paste", args: ["--no-newline"] }] : []),
+				{ cmd: "xclip", args: ["-selection", "clipboard", "-o"] },
+				{ cmd: "xsel", args: ["-ob"] },
+			];
+	}
+}
+
+let cachedClipboardReader: ClipboardCommand | undefined;
+
+/** Best-effort clipboard read: "" when unreadable or empty. The first reader
+ * that returns text is cached; empty results keep probing next time (on some
+ * setups an empty clipboard is indistinguishable from a missing tool). */
+async function readClipboard(): Promise<string> {
+	const candidates = cachedClipboardReader ? [cachedClipboardReader] : clipboardCandidates();
+	for (const candidate of candidates) {
+		try {
+			const { stdout } = await execFileAsync(candidate.cmd, candidate.args, { timeout: 1500 });
+			if (stdout.trim()) {
+				cachedClipboardReader = candidate;
+				return stdout;
+			}
+		} catch {
+			/* missing tool or empty clipboard — try the next candidate */
+		}
+	}
+	return "";
+}
 
 type ThemeLike = {
 	fg(color: string, text: string): string;
@@ -229,16 +274,19 @@ export function stripMarkers(draft: string, markers: string[]): string {
 	});
 }
 
-/** Focused component, only if it is the prompt editor with cursor APIs; else undefined. */
-function getCursorEditor(renderer: SelectionRenderer, draft: string): CursorEditor | undefined {
-	const candidate = renderer.getFocusedComponent() as Partial<CursorEditor> | null | undefined;
-	if (!candidate) return undefined;
-	for (const method of ["getLines", "getCursor", "moveToLineEnd", "insertTextAtCursor", "getText"] as const) {
-		if (typeof candidate[method] !== "function") return undefined;
+/** Insert a marker at the editor cursor. Prefers the public pasteToEditor()
+ * (bracketed paste — lands at the cursor exactly like a real paste); Pi
+ * versions without it fall back to appending at the draft end. */
+function insertMarker(ctx: ExtensionContext, marker: string): void {
+	const ui = ctx.ui as ExtensionUIContext & { pasteToEditor?: (text: string) => void };
+	if (typeof ui.pasteToEditor === "function") {
+		ui.pasteToEditor(marker);
+		dbg(`insertMarker: pasted ${marker} at cursor`);
+		return;
 	}
-	const editor = candidate as CursorEditor;
-	const text = typeof editor.getExpandedText === "function" ? editor.getExpandedText() : editor.getText();
-	return text === draft ? editor : undefined;
+	const draft = ctx.ui.getEditorText();
+	ctx.ui.setEditorText(`${draft}${draft.endsWith("\n") || !draft ? "" : " "}${marker} `);
+	dbg(`insertMarker: appended ${marker} (no pasteToEditor)`);
 }
 
 export default function (pi: ExtensionAPI): void {
@@ -354,59 +402,84 @@ export default function (pi: ExtensionAPI): void {
 		);
 	}
 
-	// ---- Alt+Q: selection → quote block ----
+	// ---- Alt+Q: selection (or clipboard) → quote block ----
 	async function quoteSelection(ctx: ExtensionContext): Promise<void> {
 		if (!ctx.hasUI || ctx.mode !== "tui") return;
-		if (
-			!versionAtLeast(VERSION, MIN_PI_VERSION) ||
-			(!REVIEWED_PI_VERSIONS.includes(VERSION) && process.env.PI_QUOTE_ALLOW_UNREVIEWED !== "1")
-		) {
-			ctx.ui.notify(
-				`Quote blocks: Pi ${VERSION} is not reviewed (reviewed: ${REVIEWED_PI_VERSIONS.join(", ")}). ` +
-					"Review it and add to REVIEWED_PI_VERSIONS, or set PI_QUOTE_ALLOW_UNREVIEWED=1 to force.",
-				"warning",
-			);
+		const reviewed =
+			versionAtLeast(VERSION, MIN_PI_VERSION) &&
+			(REVIEWED_PI_VERSIONS.includes(VERSION) || process.env.PI_QUOTE_ALLOW_UNREVIEWED === "1");
+
+		let raw = "";
+		let source = "";
+		let failure = "";
+		if (reviewed) {
+			try {
+				const renderer = getRenderer(ctx);
+				if (renderer.hasOverlay()) {
+					failure = "Close Pi dialog before quoting transcript selection.";
+				} else {
+					const selected = renderer.getActiveSelectionText();
+					raw = typeof selected === "string" ? selected.replace(/\r\n?/g, "\n").trim() : "";
+					if (raw) source = "selection";
+				}
+			} catch (error) {
+				failure = error instanceof Error ? error.message : String(error);
+			}
+		} else {
+			failure =
+				`Pi ${VERSION} is not reviewed (reviewed: ${REVIEWED_PI_VERSIONS.join(", ")}) — ` +
+				"live selection disabled; clipboard fallback only.";
+		}
+
+		if (!raw && CLIPBOARD_FALLBACK) {
+			// Pi's fullscreen copy-on-select (default on) mirrors the latest
+			// transcript selection into the system clipboard, so reading it is a
+			// public-API path that needs no renderer internals.
+			const clip = (await readClipboard()).replace(/\r\n?/g, "\n").trim();
+			if (clip) {
+				raw = clip;
+				source = "clipboard";
+			}
+		}
+
+		if (!raw) {
+			const hint = CLIPBOARD_FALLBACK
+				? "Select transcript text with mouse (or copy text to clipboard), then press Alt+Q."
+				: "Select transcript text with mouse, then press Alt+Q.";
+			ctx.ui.notify(failure ? `${failure} ${hint}` : hint, "warning");
+			dbg(`Alt+Q: no text (${failure || "no selection, empty clipboard"})`);
 			return;
 		}
-		try {
-			const renderer = getRenderer(ctx);
-			if (renderer.hasOverlay()) {
-				throw new Error("Close Pi dialog before quoting transcript selection.");
-			}
-			const selected = renderer.getActiveSelectionText();
-			const raw = typeof selected === "string" ? selected.replace(/\r\n?/g, "\n").trim() : "";
-			if (!raw) {
-				throw new Error("Select transcript text with mouse, then press Alt+Q.");
-			}
 
-			const id = allocateId();
-			store.quotes.set(id, raw);
+		createBlock(ctx, raw, source);
+	}
 
-			const draft = ctx.ui.getEditorText();
-			const editor = getCursorEditor(renderer, draft);
-			if (editor) {
-				editor.insertTextAtCursor(markerOf(id));
-				dbg(`Alt+Q: block Q${id} (${raw.split("\n").length} lines), editor cursor insert`);
-			} else {
-				ctx.ui.setEditorText(`${draft}${draft.endsWith("\n") || !draft ? "" : " "}${markerOf(id)} `);
-				dbg(`Alt+Q: block Q${id} (${raw.split("\n").length} lines), fallback append`);
+	/** Store `raw` as a new block, insert its marker at the cursor, announce it. */
+	function createBlock(ctx: ExtensionContext, raw: string, source: string): void {
+		const id = allocateId();
+		store.quotes.set(id, raw);
+		insertMarker(ctx, markerOf(id));
+		if (source === "selection") {
+			try {
+				const renderer = getRenderer(ctx);
+				renderer.clearTextSelection();
+				renderer.requestRender();
+			} catch {
+				/* selection cleanup is best-effort */
 			}
-			renderer.clearTextSelection();
-			renderer.requestRender();
-			invalidateWidget();
-			ctx.ui.notify(`Quoted as block Q${id} (${raw.split("\n").length} lines)`, "info");
-		} catch (error) {
-			dbg(`Alt+Q error: ${error instanceof Error ? error.message : String(error)}`);
-			ctx.ui.notify(error instanceof Error ? error.message : String(error), "warning");
 		}
+		invalidateWidget();
+		const lines = raw.split("\n").length;
+		ctx.ui.notify(`Quoted as block Q${id} (${lines} line${lines > 1 ? "s" : ""} · ${source})`, "info");
+		dbg(`createBlock: Q${id} ${lines} lines from ${source}`);
 	}
 
 	pi.registerShortcut(SHORTCUT, {
-		description: "Quote selected fullscreen text as a block",
+		description: "Quote selected text (or clipboard) as a block",
 		handler: async (ctx) => quoteSelection(ctx),
 	});
 	pi.registerCommand("quote-selection", {
-		description: "Quote active fullscreen selection as a block (Alt+Q)",
+		description: "Quote the active selection or clipboard as a block (Alt+Q)",
 		handler: async (_args, ctx) => quoteSelection(ctx),
 	});
 

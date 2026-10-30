@@ -28,6 +28,7 @@
 | 操作 | 效果 |
 |---|---|
 | 在对话区拖选任意文本 + `Alt+Q` | 建引用块，光标处插入 `[Qn]` |
+| `Alt+Q` 无选区 / pi 版本未验证 | 回退读系统剪贴板（pi 拖选自动复制） |
 | 继续选、继续 `Alt+Q` | 多块并存，编号每批从 Q1 开始 |
 | 删掉正文里的 `[Qn]` | 对应卡片即时消失 |
 | `Alt+Shift+Q` | 折叠 / 展开所有块 |
@@ -39,6 +40,7 @@
 | 环境变量 | 默认 | 说明 |
 |---|---|---|
 | `PI_QUOTE_FOLD_LINES` | `8` | 卡片总行数超过即自动折叠 |
+| `PI_QUOTE_CLIPBOARD` | 开 | `=0` 关闭 Alt+Q 的剪贴板回退 |
 | `PI_QUOTE_DEBUG` | 关 | `=1` 开启调试日志（`/tmp/quote-blocks-debug.log`） |
 | `PI_QUOTE_DEBUG_LOG` | `/tmp/quote-blocks-debug.log` | 日志路径 |
 | `PI_QUOTE_ALLOW_UNREVIEWED` | 关 | `=1` 跳过版本白名单（自担风险） |
@@ -53,9 +55,10 @@ pi install npm:pi-quote-blocks
 
 ## 兼容性
 
-使用了 pi 渲染器的内部 API（选区读取），因此沿用上游的**逐版验证纪律**：
-`REVIEWED_PI_VERSIONS` 白名单内直接运行；白名单外拒载并提示，验证后加入。
-需要全屏模式（pi 默认）+ 支持鼠标选区的终端。
+实时选区读取用了 pi 渲染器的内部 API，因此沿用上游的**逐版验证纪律**：
+`REVIEWED_PI_VERSIONS` 白名单内使用实时选区；其他版本、以及非全屏模式，自动回退读系统剪贴板
+（`pbpaste` / `xclip` / `xsel` / `wl-paste` / `termux-clipboard-get` / `Get-Clipboard`；
+pi 的拖选自动复制默认开启）。`PI_QUOTE_CLIPBOARD=0` 可关闭。
 
 已验证版本：**1.0.3**（上游验证）、**1.4.0**（本仓库验证，2026-10）。
 
@@ -67,4 +70,4 @@ pi install npm:pi-quote-blocks
 
 ## 路线图
 
-- [ ] 未验证 pi 版本的剪贴板降级路径（copy-on-select 读剪贴板，纯公开 API）
+- [x] 未验证 pi 版本的剪贴板降级路径（copy-on-select 读剪贴板，纯公开 API）
