@@ -3,7 +3,7 @@
 # pi-quote-blocks
 
 Select any passage of a reply and respond to just that part — Codex-style
-quote blocks, implemented entirely in the terminal.
+quote blocks, entirely in the terminal.
 
 ```
 ❝ Q1 · 3 lines
@@ -15,55 +15,6 @@ quote blocks, implemented entirely in the terminal.
 ❯ [Q1] is this right? [Q2] and this?
 ```
 
-## How it works
-
-Terminal editors are plain text grids — no inline floating blocks. This
-extension gets the same effect with three layers:
-
-1. **Block cards** render in the widget area above the editor (same spot as
-   image chips)
-2. The draft only holds short `[Qn]` markers; marker position = quote anchor
-3. **On submit** (an `input`-event transform) markers expand to standard
-   Markdown quotes (`> …`) with blank-line separation so Markdown lazy
-   continuation cannot swallow your annotations
-
-## Usage
-
-| Action | Effect |
-|---|---|
-| Drag-select transcript text + `Alt+Q` | Create a quote block, insert `[Qn]` at cursor |
-| `Alt+Q` with no selection / unreviewed pi | Falls back to the system clipboard (pi's copy-on-select keeps it in sync) |
-| Repeat for more blocks | Blocks coexist; numbering restarts at Q1 per batch |
-| Delete a `[Qn]` marker from the draft | Its card disappears |
-| `Alt+F` | Fold / expand all blocks |
-| `Alt+E` | Manage blocks mid-composition: window docked above the editor, live full-content preview; `e`/`r`/`i` act on the highlighted block, Enter opens the action view |
-| `/quote` · `/quote 2` | Quote the last / 2nd-last assistant reply as a block |
-| `/quotes` | Open the block manager (same dialog as `Alt+E`); subcommands `clear`, `fold`, `unfold`, `edit Qn`, `remove Qn`, `preview` |
-| `/quotes edit Q1` | Edit a block's text (trimmed lines stay verbatim excerpts) |
-| `/quotes remove Q1` | Drop one block and its marker |
-| `/quotes preview` | See exactly what submit will send |
-| Submit | Markers expand to `> quotes`; unreferenced blocks are dropped |
-
-## Configuration
-
-| Env | Default | Meaning |
-|---|---|---|
-| `PI_QUOTE_FOLD_LINES` | `8` | Auto-fold beyond this many card lines |
-| `PI_QUOTE_CLIPBOARD` | on | `=0` disables the clipboard fallback for Alt+Q |
-| `PI_QUOTE_DEBUG` | off | `=1` enables the debug log |
-| `PI_QUOTE_DEBUG_LOG` | `/tmp/quote-blocks-debug.log` | Log path |
-| `PI_QUOTE_ALLOW_UNREVIEWED` | off | `=1` skips the reviewed-version allowlist |
-| `PI_QUOTE_KEY_QUOTE` | `alt+q` | Key(s) for quote-selection (comma-separated list ok) |
-| `PI_QUOTE_KEY_FOLD` | `alt+f` | Key(s) for fold/expand |
-| `PI_QUOTE_KEY_MANAGE` | `alt+e` | Key(s) for the block manager |
-
-Keys use pi's key-id format (`alt+q`, `ctrl+alt+j`, …). Set them per
-terminal — e.g. in a WezTerm pane env or direnv — when a default collides
-with your terminal or shell. `alt+shift+<letter>` matches no encoding in
-pi-tui 1.4.0 (legacy has no key id; kitty CSI-u collapses onto `alt+<key>`)
-and warns at startup; keys colliding with reserved pi built-ins are
-skipped with a conflict diagnostic.
-
 ## Install
 
 ```bash
@@ -72,33 +23,63 @@ pi install npm:pi-quote-blocks
 
 Or from source: `pi install git:github.com/codelllc09/pi-quote-blocks`
 
-## Development
+## Usage
 
-```bash
-npm install
-npm run typecheck   # tsc --noEmit (strict)
-npm test            # vitest: pure functions + mocked-runtime extension tests
-```
+| Action | Effect |
+|---|---|
+| Drag-select transcript + `Alt+Q` | Quote it; `[Qn]` lands at the cursor |
+| `Alt+Q` without a selection | Falls back to the clipboard (pi's copy-on-select keeps it in sync) |
+| `/quote [n]` | Quote the nth-last assistant reply (default: last) |
+| `Alt+E` | Block manager — docked window, live preview; `e` edit · `r` remove · `i` insert marker · Enter for more |
+| `Alt+F` | Fold / expand cards |
+| Submit | Markers expand to `> quotes`; unreferenced blocks are dropped |
+
+`/quotes` opens the same manager (subcommands: `clear` `fold` `unfold`
+`edit Qn` `remove Qn` `preview`). Cards render above the editor while you
+compose; delete a `[Qn]` marker and its card disappears. Numbering
+restarts at Q1 per batch.
+
+## Configuration
+
+| Env | Default | Meaning |
+|---|---|---|
+| `PI_QUOTE_KEY_QUOTE` · `_FOLD` · `_MANAGE` | `alt+q` · `alt+f` · `alt+e` | Key(s) per action; comma-separated lists bind several keys |
+| `PI_QUOTE_FOLD_LINES` | `8` | Auto-fold beyond this many card lines |
+| `PI_QUOTE_CLIPBOARD` | on | `=0` disables the clipboard fallback |
+| `PI_QUOTE_ALLOW_UNREVIEWED` | off | `=1` skips the reviewed-version allowlist |
+| `PI_QUOTE_DEBUG` / `PI_QUOTE_DEBUG_LOG` | off / `/tmp/quote-blocks-debug.log` | Debug log |
+
+Keys use pi's key-id format; set them per terminal (WezTerm pane env,
+direnv, …) when a default collides with your terminal or shell.
+`alt+shift+<letter>` cannot match any encoding in pi-tui 1.4.0 and warns
+at startup.
+
+## How it works
+
+Terminal editors are plain text grids, so no inline floating blocks:
+
+1. **Cards** render in the widget area above the editor
+2. The draft holds only short `[Qn]` markers — position = quote anchor
+3. **On submit** an input-event transform expands markers to Markdown
+   quotes (`> …`), blank-line padded so lazy continuation cannot swallow
+   your annotations
 
 ## Compatibility
 
-Live selection reads through renderer internals, so the upstream discipline
-applies: versions listed in `REVIEWED_PI_VERSIONS` use it; anything else —
-and regular (non-fullscreen) mode — falls back to the system clipboard
-(`pbpaste` / `xclip` / `xsel` / `wl-paste` / `termux-clipboard-get` /
-`Get-Clipboard`; pi's copy-on-select is on by default). Disable with
-`PI_QUOTE_CLIPBOARD=0`.
+Live selection reads renderer internals, gated by `REVIEWED_PI_VERSIONS`
+(**1.0.3**, **1.4.0**); everything else — and regular (non-fullscreen)
+mode — uses the public clipboard path instead (`pbpaste` / `xclip` /
+`xsel` / `wl-paste` / `termux-clipboard-get` / `Get-Clipboard`).
 
-Reviewed: **1.0.3** (upstream), **1.4.0** (this repo, 2026-10).
+## Development
+
+```bash
+npm install && npm run typecheck && npm test
+```
 
 ## Credits
 
-Selection acquisition (the widget-bridge trick and API probing) derives from
-[alandarev/pi-quote](https://github.com/alandarev/pi-quote) v0.1.2 (MIT).
-The block architecture, marker expansion, and folding are this repo's work.
-See `LICENSE`.
-
-## Roadmap
-
-- [x] Clipboard fallback for unreviewed pi versions (read copy-on-select
-      clipboard — public API only)
+Selection acquisition (the widget-bridge trick and API probing) derives
+from [alandarev/pi-quote](https://github.com/alandarev/pi-quote) v0.1.2
+(MIT); the block architecture, marker expansion, and folding are this
+repo's work. See `LICENSE`.
