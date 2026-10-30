@@ -18,7 +18,7 @@
  *   ────────────────────────────────
  *   ❯ [Q1] is this right? [Q2] and this?   ← draft: short markers only
  *
- * Shortcuts: Alt+Q quote selection; Alt+Shift+Q fold/expand
+ * Shortcuts: Alt+Q quote selection; Alt+Shift+Q fold/expand; Alt+E manage
  * Fallback:  Alt+Q with no readable selection quotes the system clipboard
  *            (Pi copy-on-select keeps it in sync); PI_QUOTE_CLIPBOARD=0 off
  * Commands:  /quote-selection (Alt+Q) · /quote [n] (nth-last assistant reply)
@@ -618,6 +618,47 @@ export default function (pi: ExtensionAPI): void {
 		return text;
 	}
 
+	/** Open ctx.ui.editor on a block's text; emptied text removes the block. */
+	async function editBlock(ctx: ExtensionContext, id: number): Promise<void> {
+		const raw = store.quotes.get(id);
+		if (raw === undefined) {
+			ctx.ui.notify(`No block Q${id}`, "warning");
+			return;
+		}
+		if (typeof ctx.ui.editor !== "function") {
+			ctx.ui.notify("Editing needs a pi version with ctx.ui.editor", "warning");
+			return;
+		}
+		const edited = await ctx.ui.editor(`Edit quote block Q${id}`, raw);
+		if (edited === undefined) return; // cancelled
+		const clean = edited.replace(/\r\n?/g, "\n").trim();
+		if (!clean) {
+			removeBlock(ctx, id);
+			ctx.ui.notify(`Block Q${id} emptied → removed`, "info");
+			return;
+		}
+		store.quotes.set(id, clean);
+		invalidateWidget();
+		ctx.ui.notify(`Block Q${id} updated (${clean.split("\n").length} lines)`, "info");
+	}
+
+	/** Remove every block and its markers from the draft. */
+	function clearAllBlocks(ctx: ExtensionContext): void {
+		try {
+			ctx.ui.setEditorText(
+				stripMarkers(ctx.ui.getEditorText(), [...store.quotes.keys()].map((id) => markerOf(id))),
+			);
+		} catch {
+			/* no editor — just drop the cards */
+		}
+		store.quotes.clear();
+		store.nextId = 1;
+		foldOverride = undefined;
+		invalidateWidget();
+		dbg("clear: all blocks removed");
+		ctx.ui.notify("All quote blocks removed", "info");
+	}
+
 	pi.registerCommand("quotes", {
 		description:
 			"Manage quote blocks (/quotes · clear · fold · unfold · edit Qn · remove Qn · preview)",
@@ -639,22 +680,7 @@ export default function (pi: ExtensionAPI): void {
 					ctx.ui.notify("No quote blocks", "info");
 					return;
 				}
-				try {
-					ctx.ui.setEditorText(
-						stripMarkers(
-							ctx.ui.getEditorText(),
-							[...store.quotes.keys()].map((id) => markerOf(id)),
-						),
-					);
-				} catch {
-					/* no editor — just drop the cards */
-				}
-				store.quotes.clear();
-				store.nextId = 1;
-				foldOverride = undefined;
-				invalidateWidget();
-				dbg("clear: all blocks removed");
-				ctx.ui.notify("All quote blocks removed", "info");
+				clearAllBlocks(ctx);
 				return;
 			}
 			if (sub === "remove" || sub === "rm" || sub === "delete") {
@@ -680,26 +706,11 @@ export default function (pi: ExtensionAPI): void {
 					ctx.ui.notify("Usage: /quotes edit Qn", "warning");
 					return;
 				}
-				const raw = store.quotes.get(id);
-				if (raw === undefined) {
+				if (!store.quotes.has(id)) {
 					ctx.ui.notify(`No block Q${id}`, "warning");
 					return;
 				}
-				if (typeof ctx.ui.editor !== "function") {
-					ctx.ui.notify("Editing needs a pi version with ctx.ui.editor", "warning");
-					return;
-				}
-				const edited = await ctx.ui.editor(`Edit quote block Q${id}`, raw);
-				if (edited === undefined) return; // cancelled
-				const clean = edited.replace(/\r\n?/g, "\n").trim();
-				if (!clean) {
-					removeBlock(ctx, id);
-					ctx.ui.notify(`Block Q${id} emptied → removed`, "info");
-					return;
-				}
-				store.quotes.set(id, clean);
-				invalidateWidget();
-				ctx.ui.notify(`Block Q${id} updated (${clean.split("\n").length} lines)`, "info");
+				await editBlock(ctx, id);
 				return;
 			}
 			if (sub === "preview") {
@@ -728,6 +739,55 @@ export default function (pi: ExtensionAPI): void {
 				.join("\n");
 			ctx.ui.notify(`Quote blocks:\n${list}`, "info");
 		},
+	});
+
+	// ---- Alt+E: block manager ----
+	// Slash commands only fire when the draft starts with "/", which is
+	// exactly what you cannot do while composing. A shortcut can: the select
+	// dialog overlays the editor and never touches the draft text.
+	async function manageBlocks(ctx: ExtensionContext): Promise<void> {
+		if (!ctx.hasUI || ctx.mode !== "tui") return;
+		if (!store.quotes.size) {
+			ctx.ui.notify("No quote blocks (select text + Alt+Q)", "info");
+			return;
+		}
+		const draft = currentDraft();
+		const ordered = [...store.quotes.entries()].sort(
+			(a, b) => draft.indexOf(markerOf(a[0])) - draft.indexOf(markerOf(b[0])),
+		);
+		const CLEAR_ALL = "── clear all blocks ──";
+		const labels = ordered.map(([id, raw]) => {
+			const lines = raw.split("\n");
+			return `Q${id} · ${lines.length} lines · ${lines[0].trim().slice(0, 50)}`;
+		});
+		const chosen = await ctx.ui.select("Quote blocks — Alt+E manager", [...labels, CLEAR_ALL]);
+		if (chosen === undefined) return; // Esc cancels
+		if (chosen === CLEAR_ALL) {
+			if (await ctx.ui.confirm("Clear all", "Remove every quote block and its marker?")) {
+				clearAllBlocks(ctx);
+			}
+			return;
+		}
+		const index = labels.indexOf(chosen);
+		if (index < 0) return;
+		const id = ordered[index][0];
+		const insertLabel = `insert ${markerOf(id)} at cursor`;
+		const action = await ctx.ui.select(`Block Q${id}`, ["edit text", "remove block", insertLabel]);
+		if (action === undefined) return;
+		if (action === "edit text") {
+			await editBlock(ctx, id);
+		} else if (action === "remove block") {
+			removeBlock(ctx, id);
+			ctx.ui.notify(`Block Q${id} removed`, "info");
+		} else if (action === insertLabel) {
+			insertMarker(ctx, markerOf(id));
+			ctx.ui.notify(`Inserted ${markerOf(id)}`, "info");
+		}
+	}
+
+	pi.registerShortcut("alt+e", {
+		description: "Manage quote blocks: edit, remove, re-insert marker, or clear all",
+		handler: async (ctx) => manageBlocks(ctx),
 	});
 
 	// ---- Expand markers on submit ----

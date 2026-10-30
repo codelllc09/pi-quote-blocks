@@ -4,6 +4,11 @@
 
 ### Added
 
+- `Alt+E` block manager. Slash commands cannot fire while composing
+  (the draft no longer starts with `/`), so edit / remove / clear are
+  also reachable from a shortcut: pick a block, then edit its text,
+  remove it, re-insert its marker at the cursor, or clear all. The
+  select dialog overlays the editor; the draft is never touched.
 - `/quote [n]` — quote the nth-last assistant reply from session history as
   a block (public `sessionManager.getBranch()` API; default: the last reply).
   Keyboard-only quoting, no mouse selection needed.

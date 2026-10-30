@@ -4,7 +4,7 @@ import factory from "../quote-blocks";
 
 /** Minimal mock of the extension runtime: captures registrations. */
 function harness() {
-	const shortcuts: Record<string, unknown> = {};
+	const shortcuts: Record<string, { description: string; handler: (ctx: unknown) => Promise<void> }> = {};
 	const commands: Record<string, { description: string; handler: (args: string, ctx: unknown) => Promise<void> }> = {};
 	const events: Record<string, (event: unknown, ctx?: unknown) => Promise<unknown>> = {};
 
@@ -13,6 +13,9 @@ function harness() {
 	let widgetFactory: ((tui: unknown, theme: unknown) => { render(width: number): string[] }) | undefined;
 	let editorNext: string | undefined; // undefined = cancelled; "unsupported" = no ctx.ui.editor
 	const editorCalls: Array<[string, string | undefined]> = [];
+	const selectQueue: Array<string | undefined> = [];
+	const confirmQueue: Array<boolean> = [];
+	const selectCalls: Array<[string, string[]]> = [];
 
 	const ctx = {
 		mode: "tui",
@@ -31,6 +34,11 @@ function harness() {
 				draft += t;
 			},
 			notify: (message: string, type?: string) => notes.push([type ?? "info", message]),
+			select: (title: string, options: string[]) => {
+				selectCalls.push([title, options]);
+				return Promise.resolve(selectQueue.shift());
+			},
+			confirm: (_title: string, _message: string) => Promise.resolve(confirmQueue.shift() ?? false),
 			get editor() {
 				return editorNext === "unsupported"
 					? undefined
@@ -48,7 +56,7 @@ function harness() {
 	let branch: Array<Record<string, unknown>> = [];
 
 	const pi = {
-		registerShortcut: (key: string, def: unknown) => {
+		registerShortcut: (key: string, def: { description: string; handler: (ctx: unknown) => Promise<void> }) => {
 			shortcuts[key] = def;
 		},
 		registerCommand: (name: string, def: { description: string; handler: (args: string, ctx: unknown) => Promise<void> }) => {
@@ -67,6 +75,9 @@ function harness() {
 		ctx,
 		notes,
 		editorCalls,
+		selectCalls,
+		selectQueue,
+		confirmQueue,
 		get draft() {
 			return draft;
 		},
@@ -94,7 +105,7 @@ describe("extension factory", () => {
 
 	it("registers shortcuts, commands, and lifecycle events", () => {
 		const h = harness();
-		expect(Object.keys(h.shortcuts)).toEqual(expect.arrayContaining(["alt+q", "alt+shift+q"]));
+		expect(Object.keys(h.shortcuts)).toEqual(expect.arrayContaining(["alt+q", "alt+shift+q", "alt+e"]));
 		expect(Object.keys(h.commands)).toEqual(
 			expect.arrayContaining(["quote", "quote-selection", "quotes"]),
 		);
@@ -231,6 +242,55 @@ describe("extension factory", () => {
 		const headers = h.render().filter((line) => line.startsWith("❝"));
 		expect(headers[0]).toContain("Q2");
 		expect(headers[1]).toContain("Q1");
+	});
+
+	it("Alt+E edits a block mid-composition without touching the draft", async () => {
+		const h = harness();
+		await h.events.session_start({ type: "session_start" }, h.ctx);
+		h.branch = [{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "original" }] } }];
+		await h.commands.quote.handler("", h.ctx);
+		h.draft = "typing about [Q1] right now";
+
+		h.selectQueue.push("Q1 · 1 lines · original", "edit text");
+		h.editorNext = "revised text";
+		await h.shortcuts["alt+e"].handler(h.ctx);
+
+		expect(h.draft).toBe("typing about [Q1] right now"); // dialogs never touch the draft
+		expect(h.lastNote()).toContain("updated");
+		expect(h.render().some((line) => line.includes("revised text"))).toBe(true);
+	});
+
+	it("Alt+E clear-all sentinel strips every marker", async () => {
+		const h = harness();
+		await h.events.session_start({ type: "session_start" }, h.ctx);
+		h.branch = [
+			{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "one" }] } },
+			{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "two" }] } },
+		];
+		await h.commands.quote.handler("2", h.ctx);
+		await h.commands.quote.handler("", h.ctx);
+		h.draft = "keep  spacing [Q1] and [Q2] done";
+
+		h.selectQueue.push("── clear all blocks ──");
+		h.confirmQueue.push(true);
+		await h.shortcuts["alt+e"].handler(h.ctx);
+
+		expect(h.draft).toBe("keep  spacing and done");
+		expect(h.lastNote()).toBe("All quote blocks removed");
+		expect(h.render()).toEqual([]);
+	});
+
+	it("Alt+E re-insert action puts the marker at the cursor", async () => {
+		const h = harness();
+		await h.events.session_start({ type: "session_start" }, h.ctx);
+		h.branch = [{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "one" }] } }];
+		await h.commands.quote.handler("", h.ctx);
+		h.draft = "text without marker";
+
+		h.selectQueue.push("Q1 · 1 lines · one", "insert [Q1] at cursor");
+		await h.shortcuts["alt+e"].handler(h.ctx);
+
+		expect(h.draft).toBe("text without marker[Q1]");
 	});
 
 	it("deleting a marker from the draft prunes its card", async () => {

@@ -36,6 +36,7 @@ extension gets the same effect with three layers:
 | Repeat for more blocks | Blocks coexist; numbering restarts at Q1 per batch |
 | Delete a `[Qn]` marker from the draft | Its card disappears |
 | `Alt+Shift+Q` | Fold / expand all blocks |
+| `Alt+E` | Manage blocks mid-composition: pick a block, then edit · remove · re-insert marker · clear all |
 | `/quote` · `/quote 2` | Quote the last / 2nd-last assistant reply as a block |
 | `/quotes` | List blocks; `clear`, `fold`, `unfold`, `edit Qn`, `remove Qn`, `preview` |
 | `/quotes edit Q1` | Edit a block's text (trimmed lines stay verbatim excerpts) |
