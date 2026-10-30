@@ -355,6 +355,59 @@ describe("extension factory", () => {
 		expect(preview).not.toContain("seven"); // beyond the budget
 	});
 
+	it("pick-view hotkeys: r removes, i re-inserts, e edits without the action view", async () => {
+		const h = harness();
+		await h.events.session_start({ type: "session_start" }, h.ctx);
+		h.branch = [
+			{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "one" }] } },
+			{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "two" }] } },
+		];
+		await h.commands.quote.handler("2", h.ctx); // Q1 = one
+		await h.commands.quote.handler("", h.ctx); // Q2 = two
+		h.draft = "a [Q1] b [Q2] c";
+
+		h.customKeys.push("tui.select.down", "r"); // highlight Q2, remove it
+		await h.shortcuts["alt+e"].handler(h.ctx);
+		expect(h.draft).toBe("a [Q1] b c");
+		expect(h.lastNote()).toBe("Block Q2 removed");
+		expect(h.selectCalls).toHaveLength(0);
+
+		h.draft = "text";
+		h.customKeys.push("i"); // highlight Q1 (first row), insert its marker
+		await h.shortcuts["alt+e"].handler(h.ctx);
+		expect(h.draft).toBe("text[Q1]");
+		expect(h.lastNote()).toBe("Inserted [Q1]");
+
+		h.editorNext = "edited";
+		h.customKeys.push("e"); // edit Q1 directly
+		await h.shortcuts["alt+e"].handler(h.ctx);
+		expect(h.editorCalls.at(-1)?.[1]).toBe("one");
+		expect(h.lastNote()).toContain("updated");
+	});
+
+	it("letters are inert on the clear-all row", async () => {
+		const h = harness();
+		await h.events.session_start({ type: "session_start" }, h.ctx);
+		h.branch = [{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "only" }] } }];
+		await h.commands.quote.handler("", h.ctx);
+		h.draft = "[Q1] x";
+		h.customKeys.push("tui.select.down", "r"); // clear-all row + r
+		await h.shortcuts["alt+e"].handler(h.ctx);
+		expect(h.draft).toBe("[Q1] x"); // nothing happened
+		expect(h.lastNote()).not.toContain("removed");
+	});
+
+	it("window rows align: every rendered line has the same width", async () => {
+		const h = harness();
+		await h.events.session_start({ type: "session_start" }, h.ctx);
+		h.branch = [{ type: "message", message: { role: "assistant", content: [{ type: "text", text: "align me" }] } }];
+		await h.commands.quote.handler("", h.ctx);
+		h.customKeys.push("tui.select.cancel");
+		await h.shortcuts["alt+e"].handler(h.ctx);
+		const lengths = new Set(h.customRenderLines.map((line) => line.length));
+		expect(lengths.size).toBe(1); // borders included — off-by-one fixed
+	});
+
 	it("Alt+E edits a block mid-composition without touching the draft", async () => {
 		const h = harness();
 		await h.events.session_start({ type: "session_start" }, h.ctx);

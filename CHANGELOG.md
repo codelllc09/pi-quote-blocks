@@ -9,6 +9,10 @@
   also reachable from a shortcut: pick a block, then edit its text,
   remove it, re-insert its marker at the cursor, or clear all. The
   dialogs overlay the editor; the draft is never touched.
+- Pick-view single-key accelerators: `e`/`r`/`i` act directly on the
+  highlighted block (edit / remove / re-insert marker), skipping the
+  action view; Enter still opens it, and letters are inert on the
+  clear-all row so that path keeps its confirm safeguard.
 - The block picker is an overlay window docked above the editor — the
   same place pi's native select appears — with the live preview pane
   floating above the list. The whole flow (pick → action → confirm)
@@ -16,7 +20,9 @@
   after it closes, so no dialog nesting and no jump back to the bottom
   bar mid-flow. Fixed pane heights (cursor moves recolor one row and
   swap preview text in place), dim wrapped preview, `+N more`
-  indicator, clear-all confirm defaults to "no". Falls back to
+  indicator, clear-all confirm defaults to "no". Border rows now
+  align exactly with content rows (the fill formula was one column
+  short). Falls back to
   `ctx.ui.select` where `ctx.ui.custom` is unavailable.
 - `/quote [n]` — quote the nth-last assistant reply from session history as
   a block (public `sessionManager.getBranch()` API; default: the last reply).

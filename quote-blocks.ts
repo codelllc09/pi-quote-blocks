@@ -852,8 +852,12 @@ export default function (pi: ExtensionAPI): void {
 						};
 						const borderRow = (left: string, right: string, label: string, style?: (t: string) => string): string => {
 							const text = style ? style(label) : label;
-							const fill = Math.max(1, w - 4 - visibleWidth(text));
-							return `${left}─${text}${"─".repeat(fill)}${right}`;
+							// clip first so over-long labels (narrow windows) never
+							// overflow; fill then lands the right corner exactly on
+							// the content edge (w-4 was one column short)
+							const clipped = truncateToWidth(text, Math.max(1, w - 5), "…");
+							const fill = Math.max(1, w - 3 - visibleWidth(clipped));
+							return `${left}─${clipped}${"─".repeat(fill)}${right}`;
 						};
 
 						// ─ list pane (bottom, docked like the native selector) ─
@@ -907,7 +911,7 @@ export default function (pi: ExtensionAPI): void {
 							view === "pick" ? " pick a block " : view === "action" ? " choose an action " : " confirm ";
 						const hints =
 							view === "pick"
-								? " ↑↓ move · Enter select · Esc cancel "
+								? " ↑↓ move · e edit · r remove · i insert · Esc cancel "
 								: " ↑↓ move · Enter run · Esc back ";
 
 						const lines = [
@@ -971,6 +975,18 @@ export default function (pi: ExtensionAPI): void {
 								return;
 							}
 							view = "pick";
+						} else if (view === "pick" && data.length === 1) {
+							// single-key accelerators on the highlighted block —
+							// skip the action view entirely. Letters are inert on the
+							// clear-all row (that path keeps its Enter → confirm
+							// safeguard).
+							const target = targets[pickIndex];
+							if (target?.kind !== "block") return;
+							const key = data.toLowerCase();
+							if (key !== "e" && key !== "r" && key !== "i") return;
+							const kind = key === "e" ? "edit" : key === "r" ? "remove" : "insert";
+							done({ kind, id: target.id });
+							return;
 						} else {
 							return;
 						}
